@@ -1,26 +1,11 @@
 // lib/screens/voice_message_screen.dart
-// ignore_for_file: avoid_web_libraries_in_flutter
+// Tương thích Android + Web - dùng speech_to_text package
 
 import 'dart:async';
-import 'dart:js_interop';
 import 'package:flutter/material.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../services/api_service.dart';
 import '../utils/theme.dart';
-
-// ── JS interop declarations ───────────────────────────────────────────────────
-
-@JS('window.startSpeechRecognition')
-external void _startSpeechRecognition(
-    JSFunction onResult, JSFunction onEnd, JSFunction onError);
-
-@JS('window.stopSpeechRecognition')
-external void _stopSpeechRecognition();
-
-// Inject JS vào window khi app khởi động
-@JS('eval')
-external void _eval(String code);
-
-// ── Voice Message Screen ──────────────────────────────────────────────────────
 
 class VoiceMessageScreen extends StatefulWidget {
   const VoiceMessageScreen({super.key});
@@ -32,9 +17,10 @@ class VoiceMessageScreen extends StatefulWidget {
 class _VoiceMessageScreenState extends State<VoiceMessageScreen>
     with SingleTickerProviderStateMixin {
   final _textCtrl  = TextEditingController();
+  final _speech    = stt.SpeechToText();
   bool _isSending   = false;
   bool _isRecording = false;
-  bool _isProcessing = false;
+  bool _speechAvailable = false;
   String _interimText = '';
   final List<_SentMessage> _history = [];
 
@@ -59,143 +45,76 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
     _pulseAnim = Tween<double>(begin: 1.0, end: 1.2).animate(
         CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
     _pulseCtrl.stop();
-    _injectSpeechJS();
+    _initSpeech();
   }
 
   @override
   void dispose() {
     _pulseCtrl.dispose();
     _textCtrl.dispose();
-    _stopRecording();
+    _speech.stop();
     super.dispose();
   }
 
-  // ─── Inject JS helper vào window ─────────────────────────────────────────
-
-  void _injectSpeechJS() {
-    try {
-      _eval('''
-        window.startSpeechRecognition = function(onResult, onEnd, onError) {
-          var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-          if (!SR) { onError("not_supported"); return; }
-          
-          var r = new SR();
-          r.lang = 'vi-VN';
-          r.interimResults = true;
-          r.continuous = false;
-          r.maxAlternatives = 1;
-          window._currentRecognition = r;
-          
-          r.onresult = function(e) {
-            var final_t = '', interim_t = '';
-            for (var i = e.resultIndex; i < e.results.length; i++) {
-              var t = e.results[i][0].transcript;
-              if (e.results[i].isFinal) final_t += t;
-              else interim_t += t;
-            }
-            onResult(final_t, interim_t);
-          };
-          r.onend   = function() { onEnd(); };
-          r.onerror = function(e) { onError(e.error); };
-          r.onspeechend = function() { onEnd(); };
-          
-          r.start();
-        };
-        
-        window.stopSpeechRecognition = function() {
-          if (window._currentRecognition) {
-            try { window._currentRecognition.stop(); } catch(e) {}
-            window._currentRecognition = null;
-          }
-        };
-        
-        console.log("Speech JS injected OK");
-      ''');
-    } catch (e) {
-      debugPrint('JS inject: $e');
-    }
+  Future<void> _initSpeech() async {
+    _speechAvailable = await _speech.initialize(
+      onError: (e) => print('Speech error: $e'),
+    );
+    setState(() {});
   }
 
-  // ─── Recording ────────────────────────────────────────────────────────────
+  Future<void> _startRecording() async {
+    if (!_speechAvailable) {
+      _showError('Thiết bị không hỗ trợ ghi âm');
+      return;
+    }
 
-  void _startRecording() {
-    setState(() {
-      _isRecording  = true;
-      _isProcessing = false;
-      _interimText  = '';
-    });
+    setState(() { _isRecording = true; _interimText = ''; });
     _pulseCtrl.repeat(reverse: true);
 
-    try {
-      _startSpeechRecognition(
-        // onResult(finalText, interimText)
-        (String finalText, String interimText) {
-          if (!mounted) return;
-          setState(() => _interimText = interimText);
-          if (finalText.isNotEmpty) {
-            _textCtrl.text = finalText;
+    await _speech.listen(
+      onResult: (result) {
+        setState(() {
+          _interimText = result.recognizedWords;
+          if (result.finalResult) {
+            _textCtrl.text = result.recognizedWords;
             _textCtrl.selection = TextSelection.fromPosition(
-                TextPosition(offset: finalText.length));
+                TextPosition(offset: result.recognizedWords.length));
           }
-        }.toJS,
+        });
+      },
+      localeId: 'vi_VN',
+      listenFor: const Duration(seconds: 30),
+      pauseFor: const Duration(seconds: 3),
+      cancelOnError: false,
+      partialResults: true,
+      onSoundLevelChange: null,
+    );
 
-        // onEnd
-        () {
-          if (!mounted) return;
-          setState(() {
-            _isRecording  = false;
-            _isProcessing = false;
-            _interimText  = '';
-          });
+    // Khi speech kết thúc
+    _speech.statusListener = (status) {
+      if (status == 'done' || status == 'notListening') {
+        if (mounted) {
+          setState(() { _isRecording = false; _interimText = ''; });
           _pulseCtrl.stop();
-        }.toJS,
-
-        // onError(errorCode)
-        (String error) {
-          if (!mounted) return;
-          setState(() {
-            _isRecording  = false;
-            _isProcessing = false;
-            _interimText  = '';
-          });
-          _pulseCtrl.stop();
-          if (error == 'not_supported') {
-            _showError('Chrome không hỗ trợ Speech API. Dùng Chrome mới nhất!');
-          } else if (error != 'no-speech') {
-            _showError('Lỗi ghi âm: $error');
-          }
-        }.toJS,
-      );
-    } catch (e) {
-      setState(() => _isRecording = false);
-      _pulseCtrl.stop();
-      _showError('Lỗi: $e');
-    }
+        }
+      }
+    };
   }
 
   void _stopRecording() {
-    try { _stopSpeechRecognition(); } catch (_) {}
-    if (mounted) {
-      setState(() {
-        _isRecording  = false;
-        _isProcessing = false;
-        _interimText  = '';
-      });
-      _pulseCtrl.stop();
-    }
+    _speech.stop();
+    setState(() { _isRecording = false; _interimText = ''; });
+    _pulseCtrl.stop();
   }
-
-  // ─── Send ────────────────────────────────────────────────────────────────
 
   Future<void> _sendText(String text) async {
     if (text.trim().isEmpty) return;
     setState(() => _isSending = true);
-
     try {
       await ApiService.sendRobotAction('TTS:${text.trim()}');
       setState(() {
-        _history.insert(
-            0, _SentMessage(text: text.trim(), time: DateTime.now()));
+        _history.insert(0, _SentMessage(text: text.trim(), time: DateTime.now()));
         _textCtrl.clear();
         _interimText = '';
       });
@@ -208,8 +127,7 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
           ]),
           backgroundColor: AppTheme.success,
           behavior: SnackBarBehavior.floating,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ));
       }
     } on ApiException catch (e) {
@@ -225,21 +143,16 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
         content: Text(msg), backgroundColor: AppTheme.danger));
   }
 
-  // ─── Build ────────────────────────────────────────────────────────────────
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-                color: AppTheme.primary.withOpacity(0.1),
+          Container(padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8)),
             child: const Icon(Icons.record_voice_over_rounded,
-                color: AppTheme.primary, size: 20),
-          ),
+                color: AppTheme.primary, size: 20)),
           const SizedBox(width: 10),
           const Text('Nhắn tin cho Robot'),
         ]),
@@ -253,19 +166,16 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               colors: [AppTheme.primary, AppTheme.elderlyPurple],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
+              begin: Alignment.centerLeft, end: Alignment.centerRight,
             ),
             borderRadius: BorderRadius.circular(14),
           ),
           child: const Row(children: [
             Icon(Icons.smart_toy_rounded, color: Colors.white, size: 32),
             SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('Gửi lời nhắn đến Robot',
-                  style: TextStyle(color: Colors.white,
-                      fontWeight: FontWeight.w800, fontSize: 15)),
+                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
               SizedBox(height: 2),
               Text('Gõ hoặc nhấn 🎤 nói — robot sẽ đọc to cho người thân',
                   style: TextStyle(color: Colors.white70, fontSize: 12)),
@@ -276,33 +186,25 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
         // Quick messages
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-            const Text('Tin nhắn nhanh:',
-                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
-                    color: AppTheme.textSecondary)),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Tin nhắn nhanh:', style: TextStyle(fontSize: 12,
+                fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
             const SizedBox(height: 8),
             Wrap(spacing: 8, runSpacing: 6,
-                children: _quickMessages
-                    .map((msg) => GestureDetector(
-                          onTap: () => _sendText(msg),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: AppTheme.primary.withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(20),
-                              border: Border.all(
-                                  color: AppTheme.primary.withOpacity(0.3)),
-                            ),
-                            child: Text(msg,
-                                style: const TextStyle(
-                                    fontSize: 13,
-                                    color: AppTheme.primary,
-                                    fontWeight: FontWeight.w600)),
-                          ),
-                        ))
-                    .toList()),
+              children: _quickMessages.map((msg) => GestureDetector(
+                onTap: () => _sendText(msg),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+                  ),
+                  child: Text(msg, style: const TextStyle(fontSize: 13,
+                      color: AppTheme.primary, fontWeight: FontWeight.w600)),
+                ),
+              )).toList(),
+            ),
           ]),
         ),
 
@@ -312,23 +214,16 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
         // History
         Expanded(
           child: _history.isEmpty
-              ? Center(
-                  child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                    Icon(Icons.chat_bubble_outline_rounded,
-                        size: 56,
-                        color: AppTheme.textSecondary.withOpacity(0.3)),
-                    const SizedBox(height: 12),
-                    const Text('Chưa có tin nhắn nào',
-                        style: TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    const Text('Gõ hoặc nhấn mic để ghi âm',
-                        style: TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 12)),
-                  ]))
+              ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Icon(Icons.chat_bubble_outline_rounded,
+                      size: 56, color: AppTheme.textSecondary.withOpacity(0.3)),
+                  const SizedBox(height: 12),
+                  const Text('Chưa có tin nhắn nào',
+                      style: TextStyle(color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  const Text('Gõ hoặc nhấn mic để ghi âm',
+                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                ]))
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
                   itemCount: _history.length,
@@ -337,58 +232,30 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
         ),
 
         // Recording indicator
-        if (_isRecording || _isProcessing)
+        if (_isRecording)
           Container(
             width: double.infinity,
             margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
-              color: _isProcessing
-                  ? AppTheme.warning.withOpacity(0.1)
-                  : AppTheme.danger.withOpacity(0.08),
+              color: AppTheme.danger.withOpacity(0.08),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                  color: _isProcessing
-                      ? AppTheme.warning.withOpacity(0.3)
-                      : AppTheme.danger.withOpacity(0.3)),
+              border: Border.all(color: AppTheme.danger.withOpacity(0.3)),
             ),
             child: Row(children: [
-              Icon(
-                _isProcessing
-                    ? Icons.hourglass_top_rounded
-                    : Icons.mic_rounded,
-                color: _isProcessing ? AppTheme.warning : AppTheme.danger,
-                size: 18,
-              ),
+              const Icon(Icons.mic_rounded, color: AppTheme.danger, size: 18),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  _isProcessing
-                      ? 'Đang nhận dạng giọng nói...'
-                      : _interimText.isNotEmpty
-                          ? _interimText
-                          : 'Đang ghi âm... (hãy nói đi!)',
-                  style: TextStyle(
-                    color: _isProcessing
-                        ? AppTheme.warning
-                        : AppTheme.danger,
-                    fontSize: 13,
-                    fontStyle: _interimText.isEmpty
-                        ? FontStyle.italic
-                        : FontStyle.normal,
-                  ),
+                  _interimText.isNotEmpty ? _interimText : 'Đang ghi âm... (hãy nói đi!)',
+                  style: TextStyle(color: AppTheme.danger, fontSize: 13,
+                      fontStyle: _interimText.isEmpty ? FontStyle.italic : FontStyle.normal),
                 ),
               ),
               TextButton(
                 onPressed: _stopRecording,
-                style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 8, vertical: 4),
-                    minimumSize: Size.zero),
-                child: const Text('Hủy',
-                    style:
-                        TextStyle(color: AppTheme.danger, fontSize: 12)),
+                style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero),
+                child: const Text('Hủy', style: TextStyle(color: AppTheme.danger, fontSize: 12)),
               ),
             ]),
           ),
@@ -397,103 +264,68 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
         Container(
           padding: EdgeInsets.fromLTRB(12, 10, 12,
               MediaQuery.of(context).viewInsets.bottom + 10),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withOpacity(0.06),
-                  blurRadius: 10,
-                  offset: const Offset(0, -3))
-            ],
-          ),
+          decoration: BoxDecoration(color: Colors.white,
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06),
+                blurRadius: 10, offset: const Offset(0, -3))]),
           child: Row(children: [
-            // Mic button
+            // Mic
             GestureDetector(
               onTap: _isRecording ? _stopRecording : _startRecording,
               child: AnimatedBuilder(
                 animation: _pulseAnim,
                 builder: (_, child) => Transform.scale(
-                    scale: _isRecording ? _pulseAnim.value : 1.0,
-                    child: child),
-                child: Container(
-                  width: 46, height: 46,
+                    scale: _isRecording ? _pulseAnim.value : 1.0, child: child),
+                child: Container(width: 46, height: 46,
                   decoration: BoxDecoration(
-                    color: _isRecording
-                        ? AppTheme.danger
-                        : AppTheme.primary.withOpacity(0.1),
+                    color: _isRecording ? AppTheme.danger : AppTheme.primary.withOpacity(0.1),
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(
-                    _isRecording ? Icons.stop_rounded : Icons.mic_rounded,
-                    color:
-                        _isRecording ? Colors.white : AppTheme.primary,
-                    size: 22,
-                  ),
-                ),
+                  child: Icon(_isRecording ? Icons.stop_rounded : Icons.mic_rounded,
+                      color: _isRecording ? Colors.white : AppTheme.primary, size: 22)),
               ),
             ),
             const SizedBox(width: 8),
 
-            // Text field
+            // TextField
             Expanded(
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF3F4F6),
-                  borderRadius: BorderRadius.circular(24),
-                ),
+                decoration: BoxDecoration(color: const Color(0xFFF3F4F6),
+                    borderRadius: BorderRadius.circular(24)),
                 child: TextField(
                   controller: _textCtrl,
                   maxLines: 3, minLines: 1,
                   decoration: const InputDecoration(
                     hintText: 'Nhập hoặc nhấn 🎤 để nói...',
                     border: InputBorder.none,
-                    hintStyle: TextStyle(
-                        color: AppTheme.textSecondary, fontSize: 14),
+                    hintStyle: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
                   ),
                   style: const TextStyle(fontSize: 14),
-                  textCapitalization: TextCapitalization.sentences,
                 ),
               ),
             ),
             const SizedBox(width: 8),
 
-            // Send button
+            // Send
             AnimatedSwitcher(
               duration: const Duration(milliseconds: 200),
               child: _isSending
-                  ? const SizedBox(
-                      width: 46, height: 46,
-                      child: Center(
-                          child: SizedBox(
-                              width: 22, height: 22,
-                              child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: AppTheme.primary))))
+                  ? const SizedBox(width: 46, height: 46,
+                      child: Center(child: SizedBox(width: 22, height: 22,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primary))))
                   : GestureDetector(
                       onTap: () => _sendText(_textCtrl.text),
-                      child: Container(
-                        width: 46, height: 46,
+                      child: Container(width: 46, height: 46,
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
-                            colors: [
-                              AppTheme.primary,
-                              AppTheme.elderlyPurple
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
+                            colors: [AppTheme.primary, AppTheme.elderlyPurple],
+                            begin: Alignment.topLeft, end: Alignment.bottomRight,
                           ),
                           shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                                color: AppTheme.primary.withOpacity(0.4),
-                                blurRadius: 8,
-                                offset: const Offset(0, 3))
-                          ],
+                          boxShadow: [BoxShadow(color: AppTheme.primary.withOpacity(0.4),
+                              blurRadius: 8, offset: const Offset(0, 3))],
                         ),
-                        child: const Icon(Icons.send_rounded,
-                            color: Colors.white, size: 20),
-                      ),
+                        child: const Icon(Icons.send_rounded, color: Colors.white, size: 20)),
                     ),
             ),
           ]),
@@ -502,8 +334,6 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
     );
   }
 }
-
-// ── Message Bubble ─────────────────────────────────────────────────────────────
 
 class _SentMessage {
   final String text;
@@ -518,51 +348,37 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = msg.time;
-    final timeStr =
-        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    final timeStr = '${t.hour.toString().padLeft(2,'0')}:${t.minute.toString().padLeft(2,'0')}';
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Row(mainAxisAlignment: MainAxisAlignment.end, children: [
         const SizedBox(width: 60),
-        Flexible(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppTheme.primary, AppTheme.elderlyPurple],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(16),
-                  topRight: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
-                  bottomRight: Radius.circular(4),
-                ),
+        Flexible(child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [AppTheme.primary, AppTheme.elderlyPurple],
+                begin: Alignment.topLeft, end: Alignment.bottomRight,
               ),
-              child: Text(msg.text,
-                  style: const TextStyle(
-                      color: Colors.white, fontSize: 14, height: 1.4)),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(16), topRight: Radius.circular(16),
+                bottomLeft: Radius.circular(16), bottomRight: Radius.circular(4),
+              ),
             ),
-            const SizedBox(height: 4),
-            Row(mainAxisSize: MainAxisSize.min, children: [
-              Text(timeStr,
-                  style: const TextStyle(
-                      fontSize: 11, color: AppTheme.textSecondary)),
-              const SizedBox(width: 4),
-              const Icon(Icons.smart_toy_rounded,
-                  size: 12, color: AppTheme.primary),
-              const SizedBox(width: 2),
-              const Text('Đã gửi đến robot',
-                  style: TextStyle(
-                      fontSize: 11,
-                      color: AppTheme.primary,
-                      fontWeight: FontWeight.w600)),
-            ]),
+            child: Text(msg.text, style: const TextStyle(
+                color: Colors.white, fontSize: 14, height: 1.4)),
+          ),
+          const SizedBox(height: 4),
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Text(timeStr, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+            const SizedBox(width: 4),
+            const Icon(Icons.smart_toy_rounded, size: 12, color: AppTheme.primary),
+            const SizedBox(width: 2),
+            const Text('Đã gửi đến robot', style: TextStyle(fontSize: 11,
+                color: AppTheme.primary, fontWeight: FontWeight.w600)),
           ]),
-        ),
+        ])),
       ]),
     );
   }

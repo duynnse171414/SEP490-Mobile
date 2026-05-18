@@ -52,4 +52,9 @@ class ApiEndpoints {
   static const String robotAction = '/api/robot-action';
   static String robotActionDone(int id) => '/api/robot-action/$id/done';
   static const String robotActionLatest = '/api/robot-action/latest';
+  
+  // Interaction Logs
+  static String interactionLogsByElderly(int elderlyId) =>
+      '/api/interaction-logs?elderlyId=$elderlyId';
+  static const String interactionLogs = '/api/interaction-logs';
 }

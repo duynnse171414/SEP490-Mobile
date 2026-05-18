@@ -6,51 +6,7 @@ import '../models/models.dart';
 import '../services/api_service.dart';
 import '../utils/theme.dart';
 
-// ─── Model ────────────────────────────────────────────────────────────────────
 
-class InteractionLog {
-  final int id;
-  final int elderlyId;
-  final String? elderlyName;
-  final int? robotId;
-  final String? robotName;
-  final String? interactionType;
-  final String? userInputText;
-  final String? robotResponseText;
-  final String? emotionDetected;
-  final String createdAt;
-
-  InteractionLog({
-    required this.id,
-    required this.elderlyId,
-    this.elderlyName,
-    this.robotId,
-    this.robotName,
-    this.interactionType,
-    this.userInputText,
-    this.robotResponseText,
-    this.emotionDetected,
-    required this.createdAt,
-  });
-
-  factory InteractionLog.fromJson(Map<String, dynamic> json) => InteractionLog(
-        id: json['id'] ?? 0,
-        elderlyId: json['elderlyId'] ?? 0,
-        elderlyName: json['elderlyName'],
-        robotId: json['robotId'],
-        robotName: json['robotName'],
-        interactionType: json['interactionType'],
-        userInputText: json['userInputText'],
-        robotResponseText: json['robotResponseText'],
-        emotionDetected: json['emotionDetected'],
-        createdAt: json['createdAt'] ?? '',
-      );
-
-  DateTime? get createdDateTime {
-    try { return DateTime.parse(createdAt).toLocal(); }
-    catch (_) { return null; }
-  }
-}
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 

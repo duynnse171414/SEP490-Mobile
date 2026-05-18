@@ -382,3 +382,83 @@ class RobotAction {
         executed: json['executed'] ?? false,
       );
 }
+// ─── Model ────────────────────────────────────────────────────────────────────
+
+class InteractionLog {
+  final int id;
+  final int elderlyId;
+  final String? elderlyName;
+  final int? robotId;
+  final String? robotName;
+  final String? interactionType;
+  final String? userInputText;
+  final String? robotResponseText;
+  final String? emotionDetected;
+  final String createdAt;
+
+  InteractionLog({
+    required this.id,
+    required this.elderlyId,
+    this.elderlyName,
+    this.robotId,
+    this.robotName,
+    this.interactionType,
+    this.userInputText,
+    this.robotResponseText,
+    this.emotionDetected,
+    required this.createdAt,
+  });
+
+  factory InteractionLog.fromJson(Map<String, dynamic> json) => InteractionLog(
+        id: json['id'] ?? 0,
+        elderlyId: json['elderlyId'] ?? 0,
+        elderlyName: json['elderlyName'],
+        robotId: json['robotId'],
+        robotName: json['robotName'],
+        interactionType: json['interactionType'],
+        userInputText: json['userInputText'],
+        robotResponseText: json['robotResponseText'],
+        emotionDetected: json['emotionDetected'],
+        createdAt: json['createdAt'] ?? '',
+      );
+
+  DateTime? get createdDateTime {
+    try { return DateTime.parse(createdAt).toLocal(); }
+    catch (_) { return null; }
+  }
+}
+
+
+class ServicePackage {
+  final int id;
+  final String name;
+  final String? description;
+  final String? level;
+  final double price;
+  final bool active;
+  final int? durationDays;
+  final List<dynamic> robotActions;
+
+  ServicePackage({
+    required this.id, required this.name, this.description, this.level,
+    required this.price, required this.active, this.durationDays,
+    this.robotActions = const [],
+  });
+
+  factory ServicePackage.fromJson(Map<String, dynamic> json) => ServicePackage(
+    id: json['id'] ?? 0, name: json['name'] ?? '',
+    description: json['description'], level: json['level'],
+    price: (json['price'] ?? 0).toDouble(), active: json['active'] ?? false,
+    durationDays: json['durationDays'], robotActions: json['robotActions'] ?? [],
+  );
+
+  String get formattedPrice {
+    final s = price.toInt().toString();
+    final buf = StringBuffer();
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write('.');
+      buf.write(s[i]);
+    }
+    return '${buf}đ';
+  }
+}
