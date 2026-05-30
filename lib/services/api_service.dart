@@ -83,6 +83,81 @@ class ApiService {
     } catch (_) {}
   }
 
+  static Future<void> register({
+    required String fullName,
+    required String gender,
+    required String email,
+    required String phone,
+    required String password,
+  }) async {
+    final res = await http.post(
+      Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.register}'),
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: json.encode({
+        'fullName': fullName,
+        'gender': gender,
+        'email': email,
+        'phone': phone,
+        'password': password,
+      }),
+    ).timeout(const Duration(seconds: 30));
+    await _handleResponse(res);
+  }
+
+  static Future<void> forgotPassword(String email) async {
+    final res = await http.post(
+      Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.forgotPassword}'),
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: json.encode({'email': email}),
+    ).timeout(const Duration(seconds: 30));
+    await _handleResponse(res);
+  }
+
+  static Future<void> verifyOtp(String email, String otp) async {
+    final res = await http.post(
+      Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.verifyOtp}'),
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: json.encode({'email': email, 'otp': otp}),
+    ).timeout(const Duration(seconds: 30));
+    await _handleResponse(res);
+  }
+
+  static Future<void> resetPassword({
+    required String email,
+    required String otp,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    final res = await http.post(
+      Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.resetPassword}'),
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: json.encode({
+        'email': email,
+        'otp': otp,
+        'newPassword': newPassword,
+        'confirmPassword': confirmPassword,
+      }),
+    ).timeout(const Duration(seconds: 30));
+    await _handleResponse(res);
+  }
+
+  static Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    final res = await http.post(
+      Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.changePassword}'),
+      headers: _headers,
+      body: json.encode({
+        'currentPassword': currentPassword,
+        'newPassword': newPassword,
+        'confirmPassword': confirmPassword,
+      }),
+    ).timeout(const Duration(seconds: 30));
+    await _handleResponse(res);
+  }
+
   // ─── ELDERLY PROFILE ───────────────────────────────────────────────────────
   static Future<List<ElderlyProfile>> getElderlyProfiles() async {
     final accountId = _currentAccountId;

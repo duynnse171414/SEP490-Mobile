@@ -5,6 +5,8 @@ import 'package:provider/provider.dart';
 import '../services/auth_provider.dart';
 import '../utils/theme.dart';
 import 'home_screen.dart';
+import 'forgot_password_screen.dart';
+import 'register_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -85,10 +87,11 @@ class _LoginScreenState extends State<LoginScreen>
                         width: 100,
                         height: 100,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.15),
+                          color: Colors.white.withValues(alpha: 0.15),
                           shape: BoxShape.circle,
                           border: Border.all(
-                              color: Colors.white.withOpacity(0.3), width: 2),
+                              color: Colors.white.withValues(alpha: 0.3),
+                              width: 2),
                         ),
                         child: const Icon(Icons.smart_toy_rounded,
                             size: 55, color: Colors.white),
@@ -104,7 +107,7 @@ class _LoginScreenState extends State<LoginScreen>
                       Text('Quản lý gia đình thông minh',
                           style: TextStyle(
                               fontSize: 15,
-                              color: Colors.white.withOpacity(0.8))),
+                              color: Colors.white.withValues(alpha: 0.8))),
                       const SizedBox(height: 40),
 
                       // Card form
@@ -115,7 +118,7 @@ class _LoginScreenState extends State<LoginScreen>
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
-                                color: Colors.black.withOpacity(0.2),
+                                color: Colors.black.withValues(alpha: 0.2),
                                 blurRadius: 30,
                                 offset: const Offset(0, 10))
                           ],
@@ -172,7 +175,30 @@ class _LoginScreenState extends State<LoginScreen>
                                     : null,
                                 onFieldSubmitted: (_) => _login(),
                               ),
-                              const SizedBox(height: 28),
+
+                              // Forgot password link
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: TextButton(
+                                  onPressed: () => Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                        builder: (_) =>
+                                            const ForgotPasswordScreen()),
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 4, horizontal: 0),
+                                  ),
+                                  child: const Text(
+                                    'Quên mật khẩu?',
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        color: AppTheme.primary,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 8),
 
                               // Login Button
                               Consumer<AuthProvider>(
@@ -208,24 +234,50 @@ class _LoginScreenState extends State<LoginScreen>
                         ),
                       ),
 
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 16),
+
+                      // Register link
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text('Chưa có tài khoản?',
+                              style: TextStyle(
+                                  color: Colors.white.withValues(alpha: 0.8),
+                                  fontSize: 14)),
+                          TextButton(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                  builder: (_) => const RegisterScreen()),
+                            ),
+                            child: const Text('Đăng ký',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14)),
+                          ),
+                        ],
+                      ),
+
+                      const SizedBox(height: 8),
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 16, vertical: 10),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.1),
+                          color: Colors.white.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(Icons.shield_outlined,
-                                size: 14, color: Colors.white.withOpacity(0.8)),
+                                size: 14,
+                                color: Colors.white.withValues(alpha: 0.8)),
                             const SizedBox(width: 6),
                             Text('Chỉ tài khoản FAMILYMEMBER được phép',
                                 style: TextStyle(
                                     fontSize: 12,
-                                    color: Colors.white.withOpacity(0.8))),
+                                    color:
+                                        Colors.white.withValues(alpha: 0.8))),
                           ],
                         ),
                       ),

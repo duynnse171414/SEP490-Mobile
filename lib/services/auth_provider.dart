@@ -81,6 +81,146 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  Future<bool> register({
+    required String fullName,
+    required String gender,
+    required String email,
+    required String phone,
+    required String password,
+  }) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await ApiService.register(
+        fullName: fullName,
+        gender: gender,
+        email: email,
+        phone: phone,
+        password: password,
+      );
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      _error = 'Không thể kết nối server.';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> verifyOtp(String email, String otp) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await ApiService.verifyOtp(email, otp);
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      _error = 'Không thể kết nối server.';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> forgotPassword(String email) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await ApiService.forgotPassword(email.trim());
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      _error = 'Không thể kết nối server.';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> resetPassword({
+    required String email,
+    required String otp,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await ApiService.resetPassword(
+        email: email.trim(),
+        otp: otp.trim(),
+        newPassword: newPassword,
+        confirmPassword: confirmPassword,
+      );
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      _error = 'Không thể kết nối server.';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> changePassword({
+    required String currentPassword,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+    try {
+      await ApiService.changePassword(
+        currentPassword: currentPassword,
+        newPassword: newPassword,
+        confirmPassword: confirmPassword,
+      );
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      _error = 'Không thể kết nối server.';
+      _isLoading = false;
+      notifyListeners();
+      return false;
+    }
+  }
+
   Future<void> logout() async {
     await ApiService.logout();
     ApiService.clearToken();

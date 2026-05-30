@@ -10,6 +10,11 @@ class ApiEndpoints {
   // Auth
   static const String login = '/api/login';
   static const String logout = '/api/logout';
+  static const String register = '/api/register';
+  static const String forgotPassword = '/api/forgot-password';
+  static const String verifyOtp = '/api/verify-otp';
+  static const String resetPassword = '/api/reset-password';
+  static const String changePassword = '/api/change-password';
 
   // Elderly Profile
   static String createElderlyForAccount(int accountId) =>
