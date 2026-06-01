@@ -37,7 +37,32 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
     }
   }
 
+  static const int _freeActionLimit = 5;
+
+  Future<bool> _hasActivePaidPackage() async {
+    try {
+      final pkgs = await ApiService.getUserPackagesByElderly(widget.elderlyProfile.id);
+      return pkgs.any((p) {
+        final s = (p['status'] as String? ?? '').toUpperCase();
+        final expired = p['expiredAt'] as String?;
+        if (s != 'PAID') return false;
+        if (expired == null) return true;
+        return DateTime.tryParse(expired)?.isAfter(DateTime.now()) ?? false;
+      });
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _addAction() async {
+    if (_actions.length >= _freeActionLimit) {
+      final hasPkg = await _hasActivePaidPackage();
+      if (!mounted) return;
+      if (!hasPkg) {
+        _showUpgradeDialog();
+        return;
+      }
+    }
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -45,6 +70,71 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
       builder: (_) => const _AddActionSheet(),
     );
     if (result == true) _load();
+  }
+
+  void _showUpgradeDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade100,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.lock_rounded, color: Colors.amber, size: 24),
+          ),
+          const SizedBox(width: 12),
+          const Text('Giới hạn động tác', style: TextStyle(fontSize: 18)),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Bạn đã sử dụng hết $_freeActionLimit động tác miễn phí.',
+              style: const TextStyle(fontSize: 15),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: const Row(children: [
+                Icon(Icons.star_rounded, color: Colors.amber, size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Nâng cấp lên gói Premium để thêm không giới hạn động tác!',
+                    style: TextStyle(fontSize: 13, color: Colors.black87),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.star_rounded, size: 18),
+            label: const Text('Mua gói Premium'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber.shade700,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _playAction(ActionLibrary action) async {

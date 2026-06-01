@@ -28,6 +28,20 @@ class ApiService {
         if (_token != null) 'Authorization': 'Bearer $_token',
       };
 
+  static String _extractErrorMsg(http.Response res) {
+    String msg = 'Lỗi ${res.statusCode}';
+    try {
+      final b = json.decode(res.body);
+      msg = b['message'] ?? b['error'] ?? b['detail'] ?? msg;
+      if ((msg == 'Bad Request' || msg.startsWith('Lỗi ')) && res.body.isNotEmpty) {
+        msg = res.body;
+      }
+    } catch (_) {
+      if (res.body.isNotEmpty) msg = res.body;
+    }
+    return msg;
+  }
+
   static Future<Map<String, dynamic>> _handleResponse(http.Response res) async {
     if (res.statusCode >= 200 && res.statusCode < 300) {
       if (res.body.isEmpty) return {};
@@ -37,10 +51,7 @@ class ApiService {
         return {'data': d};
       } catch (_) { return {}; }
     }
-    String msg = 'Lỗi ${res.statusCode}';
-    try { final b = json.decode(res.body); msg = b['message'] ?? b['error'] ?? msg; }
-    catch (_) {}
-    throw ApiException(msg, statusCode: res.statusCode);
+    throw ApiException(_extractErrorMsg(res), statusCode: res.statusCode);
   }
 
   static Future<List<dynamic>> _handleListResponse(http.Response res) async {
@@ -57,10 +68,7 @@ class ApiService {
         return [];
       } catch (_) { return []; }
     }
-    String msg = 'Lỗi ${res.statusCode}';
-    try { final b = json.decode(res.body); msg = b['message'] ?? b['error'] ?? msg; }
-    catch (_) {}
-    throw ApiException(msg, statusCode: res.statusCode);
+    throw ApiException(_extractErrorMsg(res), statusCode: res.statusCode);
   }
 
   // ─── AUTH ──────────────────────────────────────────────────────────────────
@@ -302,6 +310,21 @@ class ApiService {
     return list.map((e) => AlertNotification.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  static Future<void> resolveAlert(AlertNotification alert) async {
+    final res = await http.put(
+      Uri.parse('${AppConstants.baseUrl}/api/alerts/${alert.id}'),
+      headers: _headers,
+      body: json.encode({
+        'elderlyId': alert.elderlyId,
+        'alertType': alert.alertType,
+        'message': alert.message,
+        'resolved': true,
+        if (alert.reminderLogId != null) 'reminderLogId': alert.reminderLogId,
+      }),
+    ).timeout(const Duration(seconds: 30));
+    _handleResponse(res);
+  }
+
   // ─── ACTION LIBRARY ────────────────────────────────────────────────────────
   static Future<List<ActionLibrary>> getActionLibrary() async {
     final res = await http.get(
@@ -374,10 +397,18 @@ class ApiService {
     ).timeout(const Duration(seconds: 30));
     return _handleResponse(res);
   }
+  static Future<List<dynamic>> getUserPackagesByElderly(int elderlyId) async {
+    final res = await http.get(
+      Uri.parse('${AppConstants.baseUrl}/api/user-packages/elderly/$elderlyId'),
+      headers: _headers,
+    ).timeout(const Duration(seconds: 30));
+    return _handleListResponse(res);
+  }
+
   // ─── INTERACTION LOGS ──────────────────────────────────────────────────────
   static Future<List<dynamic>> getInteractionLogs(int elderlyId) async {
     final res = await http.get(
-      Uri.parse('${AppConstants.baseUrl}/api/interaction-logs?elderlyId=$elderlyId'),
+      Uri.parse('${AppConstants.baseUrl}/api/interaction-logs/elderly/$elderlyId'),
       headers: _headers,
     ).timeout(const Duration(seconds: 30));
     return _handleListResponse(res);

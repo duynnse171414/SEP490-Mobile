@@ -106,7 +106,10 @@ class _AlertScreenState extends State<AlertScreen> {
                         child: ListView.builder(
                           padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
                           itemCount: _alerts.length,
-                          itemBuilder: (_, i) => _AlertCard(alert: _alerts[i]),
+                          itemBuilder: (_, i) => _AlertCard(
+                            alert: _alerts[i],
+                            onResolved: _load,
+                          ),
                         ),
                       ),
       ),
@@ -140,12 +143,42 @@ class _AlertScreenState extends State<AlertScreen> {
 
 // ── Alert Card ────────────────────────────────────────────────────────────────
 
-class _AlertCard extends StatelessWidget {
+class _AlertCard extends StatefulWidget {
   final AlertNotification alert;
-  const _AlertCard({required this.alert});
+  final VoidCallback onResolved;
+  const _AlertCard({required this.alert, required this.onResolved});
+
+  @override
+  State<_AlertCard> createState() => _AlertCardState();
+}
+
+class _AlertCardState extends State<_AlertCard> {
+  bool _resolving = false;
+
+  Future<void> _resolve() async {
+    setState(() => _resolving = true);
+    try {
+      await ApiService.resolveAlert(widget.alert);
+      widget.onResolved();
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: AppTheme.danger),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Không thể cập nhật'), backgroundColor: AppTheme.danger),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _resolving = false);
+    }
+  }
 
   IconData get _typeIcon {
-    switch (alert.alertType?.toUpperCase()) {
+    switch (widget.alert.alertType?.toUpperCase()) {
       case 'NO_RESPONSE': return Icons.notifications_off_rounded;
       case 'MISSED':      return Icons.alarm_off_rounded;
       case 'EMERGENCY':   return Icons.emergency_rounded;
@@ -154,16 +187,17 @@ class _AlertCard extends StatelessWidget {
   }
 
   String get _typeLabel {
-    switch (alert.alertType?.toUpperCase()) {
+    switch (widget.alert.alertType?.toUpperCase()) {
       case 'NO_RESPONSE': return 'Không phản hồi';
       case 'MISSED':      return 'Bỏ lỡ nhắc nhở';
       case 'EMERGENCY':   return 'Khẩn cấp';
-      default:            return alert.alertType ?? 'Cảnh báo';
+      default:            return widget.alert.alertType ?? 'Cảnh báo';
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final alert = widget.alert;
     final resolved = alert.resolved;
     final dt = alert.createdDateTime;
     final timeStr = dt != null
@@ -185,7 +219,6 @@ class _AlertCard extends StatelessWidget {
         padding: const EdgeInsets.all(14),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            // Icon type
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
@@ -213,7 +246,6 @@ class _AlertCard extends StatelessWidget {
                       style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
                 ]),
             ])),
-            // Status badge
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
@@ -271,6 +303,23 @@ class _AlertCard extends StatelessWidget {
               Text('Log #${alert.reminderLogId}',
                   style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             ],
+            const Spacer(),
+            if (!resolved)
+              _resolving
+                  ? const SizedBox(
+                      width: 20, height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : TextButton.icon(
+                      onPressed: _resolve,
+                      icon: const Icon(Icons.check_circle_outline_rounded, size: 16),
+                      label: const Text('Resolve'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppTheme.success,
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
           ]),
         ]),
       ),

@@ -21,6 +21,7 @@ class _RemindersScreenState extends State<RemindersScreen>
   List<ReminderLog> _logs = [];
   bool _loadingReminders = true;
   bool _loadingLogs = true;
+  String? _selectedTypeFilter; // null = tất cả
   String? _errorReminders;
   String? _errorLogs;
 
@@ -39,6 +40,36 @@ class _RemindersScreenState extends State<RemindersScreen>
   }
 
   // ─── Load data ─────────────────────────────────────────────────────────────
+
+  // Danh sách các type có trong reminders hiện tại
+  List<String> get _availableTypes {
+    final types = _reminders
+        .map((r) => r.reminderType ?? '')
+        .where((t) => t.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    return types;
+  }
+
+  // Reminders đã filter + sort theo giờ
+  List<Reminder> get _filteredReminders {
+    var list = _selectedTypeFilter == null
+        ? List<Reminder>.from(_reminders)
+        : _reminders.where((r) => r.reminderType == _selectedTypeFilter).toList();
+    list.sort((a, b) {
+      final ta = a.scheduleDateTime;
+      final tb = b.scheduleDateTime;
+      if (ta == null && tb == null) return 0;
+      if (ta == null) return 1;
+      if (tb == null) return -1;
+      // So sánh chỉ theo giờ:phút trong ngày
+      final aMin = ta.hour * 60 + ta.minute;
+      final bMin = tb.hour * 60 + tb.minute;
+      return aMin.compareTo(bMin);
+    });
+    return list;
+  }
 
   Future<void> _loadReminders() async {
     setState(() { _loadingReminders = true; _errorReminders = null; });
@@ -123,7 +154,32 @@ class _RemindersScreenState extends State<RemindersScreen>
 
   // ─── Actions ───────────────────────────────────────────────────────────────
 
+  static const int _freeReminderLimit = 5;
+
+  Future<bool> _hasActivePaidPackage() async {
+    try {
+      final pkgs = await ApiService.getUserPackagesByElderly(widget.elderlyProfile.id);
+      return pkgs.any((p) {
+        final s = (p['status'] as String? ?? '').toUpperCase();
+        final expired = p['expiredAt'] as String?;
+        if (s != 'PAID') return false;
+        if (expired == null) return true;
+        return DateTime.tryParse(expired)?.isAfter(DateTime.now()) ?? false;
+      });
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _addReminder() async {
+    if (_reminders.length >= _freeReminderLimit) {
+      final hasPkg = await _hasActivePaidPackage();
+      if (!mounted) return;
+      if (!hasPkg) {
+        _showUpgradeDialog();
+        return;
+      }
+    }
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
@@ -131,6 +187,71 @@ class _RemindersScreenState extends State<RemindersScreen>
       builder: (_) => _AddReminderSheet(elderlyProfile: widget.elderlyProfile),
     );
     if (result == true) { _loadReminders(); _loadLogs(); }
+  }
+
+  void _showUpgradeDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade100,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.lock_rounded, color: Colors.amber, size: 24),
+          ),
+          const SizedBox(width: 12),
+          const Text('Giới hạn nhắc nhở', style: TextStyle(fontSize: 18)),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Bạn đã sử dụng hết $_freeReminderLimit nhắc nhở miễn phí.',
+              style: const TextStyle(fontSize: 15),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.amber.shade200),
+              ),
+              child: const Row(children: [
+                Icon(Icons.star_rounded, color: Colors.amber, size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Nâng cấp lên gói Premium để thêm không giới hạn nhắc nhở!',
+                    style: TextStyle(fontSize: 13, color: Colors.black87),
+                  ),
+                ),
+              ]),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đóng'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.star_rounded, size: 18),
+            label: const Text('Mua gói Premium'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.amber.shade700,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _deleteReminder(Reminder r) async {
@@ -232,6 +353,7 @@ class _RemindersScreenState extends State<RemindersScreen>
 
   Widget _buildRemindersTab() {
     final inactiveCount = _reminders.where((r) => !r.active).length;
+    final displayed = _filteredReminders;
     return Column(children: [
       // Alert banner
       if (!_loadingReminders && inactiveCount > 0)
@@ -255,21 +377,50 @@ class _RemindersScreenState extends State<RemindersScreen>
           ),
         ),
 
+      // Filter chips
+      if (!_loadingReminders && _availableTypes.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(children: [
+              FilterChip(
+                label: const Text('Tất cả'),
+                selected: _selectedTypeFilter == null,
+                onSelected: (_) => setState(() => _selectedTypeFilter = null),
+                selectedColor: AppTheme.primary.withValues(alpha: 0.15),
+                checkmarkColor: AppTheme.primary,
+              ),
+              ..._availableTypes.map((type) => Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: FilterChip(
+                  label: Text(type),
+                  selected: _selectedTypeFilter == type,
+                  onSelected: (_) => setState(() =>
+                      _selectedTypeFilter = _selectedTypeFilter == type ? null : type),
+                  selectedColor: AppTheme.primary.withValues(alpha: 0.15),
+                  checkmarkColor: AppTheme.primary,
+                ),
+              )),
+            ]),
+          ),
+        ),
+
       Expanded(
         child: _loadingReminders
             ? const Center(child: CircularProgressIndicator())
             : _errorReminders != null
                 ? _buildError(_errorReminders!, _loadReminders)
-                : _reminders.isEmpty
+                : displayed.isEmpty
                     ? _buildEmpty('Chưa có nhắc nhở nào', Icons.alarm_off_rounded)
                     : RefreshIndicator(
                         onRefresh: _loadReminders,
                         child: ListView.builder(
                           padding: const EdgeInsets.fromLTRB(12, 8, 12, 80),
-                          itemCount: _reminders.length,
+                          itemCount: displayed.length,
                           itemBuilder: (_, i) => _ReminderCard(
-                            reminder: _reminders[i],
-                            onDelete: () => _deleteReminder(_reminders[i]),
+                            reminder: displayed[i],
+                            onDelete: () => _deleteReminder(displayed[i]),
                           ),
                         ),
                       ),
@@ -619,7 +770,7 @@ class _AddReminderSheetState extends State<_AddReminderSheet> {
         elderlyId: widget.elderlyProfile.id,
         title: _titleCtrl.text.trim(),
         reminderType: _reminderType,
-        scheduleTime: _scheduleDateTime!.toUtc().toIso8601String(),
+        scheduleTime: _scheduleDateTime!.toIso8601String(),
         repeatPattern: _repeatPattern,
         active: _active,
       ));
@@ -690,11 +841,10 @@ class _AddReminderSheetState extends State<_AddReminderSheet> {
                 value: _reminderType,
                 decoration: const InputDecoration(labelText: 'Loại', prefixIcon: Icon(Icons.label_outline)),
                 items: const [
-                  DropdownMenuItem(value: 'MEDICINE', child: Text('Uống thuốc')),
+                  DropdownMenuItem(value: 'MEDICATION', child: Text('Uống thuốc')),
                   DropdownMenuItem(value: 'EXERCISE', child: Text('Tập thể dục')),
-                  DropdownMenuItem(value: 'MEAL', child: Text('Ăn uống')),
-                  DropdownMenuItem(value: 'CHECKUP', child: Text('Khám bệnh')),
-                  DropdownMenuItem(value: 'OTHER', child: Text('Khác')),
+                  DropdownMenuItem(value: 'NUTRITION', child: Text('Dinh dưỡng')),
+                  
                 ],
                 onChanged: (v) => setState(() => _reminderType = v),
               ),

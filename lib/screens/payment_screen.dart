@@ -73,7 +73,41 @@ class _PaymentScreenState extends State<PaymentScreen> {
       elderlyId = selected;
     }
 
+    // Kiểm tra gói hiện tại trước khi cho mua
     if (!mounted) return;
+    try {
+      final pkgs = await ApiService.getUserPackagesByElderly(elderlyId);
+      if (!mounted) return;
+      final active = pkgs.where((p) {
+        final s = (p['status'] as String? ?? '').toUpperCase();
+        return s == 'PAID' || s == 'PENDING';
+      }).toList();
+      if (active.isNotEmpty) {
+        final expiredAt = active.first['expiredAt'] as String?;
+        final statusStr = (active.first['status'] as String? ?? '').toUpperCase();
+        final msg = statusStr == 'PENDING'
+            ? 'Bạn đang có một giao dịch chờ thanh toán.\nVui lòng hoàn tất hoặc chờ hết hạn trước khi mua gói mới.'
+            : 'Bạn đã có gói dịch vụ đang hoạt động.${expiredAt != null ? '\nHết hạn: ${expiredAt.substring(0, 10)}' : ''}';
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(children: [
+              Icon(Icons.info_outline_rounded, color: AppTheme.warning),
+              SizedBox(width: 8),
+              Text('Đã có gói dịch vụ'),
+            ]),
+            content: Text(msg),
+            actions: [TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            )],
+          ),
+        );
+        return;
+      }
+    } catch (_) {}
+
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -145,14 +179,42 @@ class _PaymentScreenState extends State<PaymentScreen> {
     } on ApiException catch (e) {
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(e.message), backgroundColor: AppTheme.danger));
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(children: [
+              Icon(Icons.error_outline_rounded, color: AppTheme.danger),
+              SizedBox(width: 8),
+              Text('Không thể tạo thanh toán'),
+            ]),
+            content: Text(e.message, style: const TextStyle(fontSize: 14)),
+            actions: [TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            )],
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('Lỗi: $e'), backgroundColor: AppTheme.danger));
+        showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(children: [
+              Icon(Icons.error_outline_rounded, color: AppTheme.danger),
+              SizedBox(width: 8),
+              Text('Lỗi'),
+            ]),
+            content: Text('$e', style: const TextStyle(fontSize: 14)),
+            actions: [TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            )],
+          ),
+        );
       }
     }
   }

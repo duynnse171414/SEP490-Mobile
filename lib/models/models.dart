@@ -1,5 +1,20 @@
 // lib/models/models.dart
 
+// Backend trả datetime không có timezone → parse như UTC rồi convert sang local
+DateTime? _parseUtcToLocal(String? s) {
+  if (s == null || s.isEmpty) return null;
+  try {
+    // Nếu đã có timezone info (Z / +HH:mm) → parse bình thường rồi toLocal
+    // Nếu không có → gắn Z vào để parse như UTC
+    final normalized = (s.contains('Z') || s.contains('+') || s.contains('-', 10))
+        ? s
+        : '${s}Z';
+    return DateTime.parse(normalized).toLocal();
+  } catch (_) {
+    return null;
+  }
+}
+
 // ─── USER ─────────────────────────────────────────────────────────────────────
 class User {
   final int id;
@@ -158,8 +173,7 @@ class Reminder {
       );
 
   DateTime? get scheduleDateTime {
-    try { return DateTime.parse(scheduleTime).toLocal(); }
-    catch (_) { return null; }
+    return _parseUtcToLocal(scheduleTime);
   }
 }
 
@@ -234,14 +248,11 @@ class ReminderLog {
       );
 
   DateTime? get triggeredDateTime {
-    try { return DateTime.parse(triggeredTime).toLocal(); }
-    catch (_) { return null; }
+    return _parseUtcToLocal(triggeredTime);
   }
 
   DateTime? get confirmedDateTime {
-    if (confirmedTime == null) return null;
-    try { return DateTime.parse(confirmedTime!).toLocal(); }
-    catch (_) { return null; }
+    return _parseUtcToLocal(confirmedTime);
   }
 }
 
@@ -325,8 +336,7 @@ class AlertNotification {
       );
 
   DateTime? get createdDateTime {
-    try { return DateTime.parse(createdAt).toLocal(); }
-    catch (_) { return null; }
+    return _parseUtcToLocal(createdAt);
   }
 
   bool get isUnresolved => !resolved;
@@ -423,8 +433,7 @@ class InteractionLog {
       );
 
   DateTime? get createdDateTime {
-    try { return DateTime.parse(createdAt).toLocal(); }
-    catch (_) { return null; }
+    return _parseUtcToLocal(createdAt);
   }
 }
 
