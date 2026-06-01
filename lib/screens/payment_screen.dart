@@ -2,6 +2,7 @@
 // Tương thích cả Web lẫn Android - dùng url_launcher thay dart:html
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../services/api_service.dart';
 import '../utils/theme.dart';
@@ -14,13 +15,33 @@ class PaymentScreen extends StatefulWidget {
   State<PaymentScreen> createState() => _PaymentScreenState();
 }
 
-class _PaymentScreenState extends State<PaymentScreen> {
+// Gói đang dùng của 1 elderly
+class _ElderlyPackageInfo {
+  final ElderlyProfile profile;
+  final Map<String, dynamic>? activePackage; // null = chưa có gói
+  _ElderlyPackageInfo(this.profile, this.activePackage);
+}
+
+class _PaymentScreenState extends State<PaymentScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabCtrl;
   List<ServicePackage> _packages = [];
+  List<_ElderlyPackageInfo> _elderlyPackages = [];
   bool _isLoading = true;
   String? _error;
 
   @override
-  void initState() { super.initState(); _load(); }
+  void initState() {
+    super.initState();
+    _tabCtrl = TabController(length: 2, vsync: this);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _tabCtrl.dispose();
+    super.dispose();
+  }
 
   Future<void> _load() async {
     setState(() { _isLoading = true; _error = null; });
@@ -29,7 +50,31 @@ class _PaymentScreenState extends State<PaymentScreen> {
       final packages = raw
           .map((e) => ServicePackage.fromJson(e as Map<String, dynamic>))
           .toList();
-      setState(() { _packages = packages; _isLoading = false; });
+
+      // Load gói hiện tại của từng elderly
+      final profiles = await ApiService.getElderlyProfiles();
+      final elderlyPkgs = <_ElderlyPackageInfo>[];
+      for (final p in profiles) {
+        try {
+          final pkgs = await ApiService.getUserPackagesByElderly(p.id);
+          final active = pkgs.cast<Map<String, dynamic>>().where((pkg) {
+            final s = (pkg['status'] as String? ?? '').toUpperCase();
+            final exp = pkg['expiredAt'] as String?;
+            if (s != 'PAID') return false;
+            if (exp == null) return true;
+            return DateTime.tryParse(exp)?.isAfter(DateTime.now()) ?? false;
+          }).toList();
+          elderlyPkgs.add(_ElderlyPackageInfo(p, active.isNotEmpty ? active.first : null));
+        } catch (_) {
+          elderlyPkgs.add(_ElderlyPackageInfo(p, null));
+        }
+      }
+
+      setState(() {
+        _packages = packages;
+        _elderlyPackages = elderlyPkgs;
+        _isLoading = false;
+      });
     } on ApiException catch (e) {
       setState(() { _error = e.message; _isLoading = false; });
     } catch (e) {
@@ -312,7 +357,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
       appBar: AppBar(
         title: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(color: AppTheme.success.withOpacity(0.1),
+            decoration: BoxDecoration(
+                color: AppTheme.success.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8)),
             child: const Icon(Icons.workspace_premium_rounded,
                 color: AppTheme.success, size: 20)),
@@ -320,6 +366,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
           const Text('Gói dịch vụ'),
         ]),
         actions: [IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _load)],
+        bottom: TabBar(
+          controller: _tabCtrl,
+          tabs: const [
+            Tab(icon: Icon(Icons.people_rounded, size: 18), text: 'Gói của tôi'),
+            Tab(icon: Icon(Icons.add_card_rounded, size: 18), text: 'Mua gói'),
+          ],
+        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
@@ -331,20 +384,143 @@ class _PaymentScreenState extends State<PaymentScreen> {
                   const SizedBox(height: 12),
                   ElevatedButton(onPressed: _load, child: const Text('Thử lại')),
                 ]))
-              : _packages.isEmpty
-                  ? const Center(child: Text('Chưa có gói dịch vụ nào',
-                      style: TextStyle(color: AppTheme.textSecondary)))
-                  : RefreshIndicator(
+              : TabBarView(
+                  controller: _tabCtrl,
+                  children: [
+                    // ── Tab 1: Gói của người nhà ──────────────────────
+                    RefreshIndicator(
                       onRefresh: _load,
-                      child: ListView.builder(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: _packages.length,
-                        itemBuilder: (_, i) => _PackageCard(
-                          pkg: _packages[i], onBuy: () => _onBuy(_packages[i])),
-                      )),
+                      child: _elderlyPackages.isEmpty
+                          ? const Center(child: Text('Chưa có người nhà nào',
+                              style: TextStyle(color: AppTheme.textSecondary)))
+                          : ListView.builder(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: _elderlyPackages.length,
+                              itemBuilder: (_, i) =>
+                                  _ElderlyPackageCard(info: _elderlyPackages[i]),
+                            ),
+                    ),
+                    // ── Tab 2: Mua gói ────────────────────────────────
+                    RefreshIndicator(
+                      onRefresh: _load,
+                      child: _packages.isEmpty
+                          ? const Center(child: Text('Chưa có gói dịch vụ nào',
+                              style: TextStyle(color: AppTheme.textSecondary)))
+                          : ListView.builder(
+                              padding: const EdgeInsets.all(16),
+                              itemCount: _packages.length,
+                              itemBuilder: (_, i) => _PackageCard(
+                                  pkg: _packages[i], onBuy: () => _onBuy(_packages[i])),
+                            ),
+                    ),
+                  ],
+                ),
     );
   }
 }
+
+// ── Elderly Package Card ──────────────────────────────────────────────────────
+
+class _ElderlyPackageCard extends StatelessWidget {
+  final _ElderlyPackageInfo info;
+  const _ElderlyPackageCard({required this.info});
+
+  @override
+  Widget build(BuildContext context) {
+    final pkg = info.activePackage;
+    final hasPkg = pkg != null;
+    final expiredAt = hasPkg ? (pkg['expiredAt'] as String?) : null;
+    final expiry = expiredAt != null ? DateTime.tryParse(expiredAt) : null;
+    final expiryStr = expiry != null
+        ? DateFormat('dd/MM/yyyy').format(expiry.toLocal())
+        : null;
+    final daysLeft = expiry?.toLocal().difference(DateTime.now()).inDays;
+
+    final Color statusColor = hasPkg
+        ? (daysLeft != null && daysLeft <= 7 ? AppTheme.warning : AppTheme.success)
+        : AppTheme.textSecondary;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: hasPkg
+              ? statusColor.withValues(alpha: 0.3)
+              : Colors.grey.withValues(alpha: 0.15),
+        ),
+        boxShadow: [BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04),
+          blurRadius: 8, offset: const Offset(0, 2),
+        )],
+      ),
+      child: Row(children: [
+        CircleAvatar(
+          radius: 22,
+          backgroundColor: AppTheme.elderlyPurple.withValues(alpha: 0.1),
+          child: Text(
+            info.profile.name.isNotEmpty ? info.profile.name[0].toUpperCase() : '?',
+            style: const TextStyle(color: AppTheme.elderlyPurple,
+                fontWeight: FontWeight.w800, fontSize: 16),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(info.profile.name,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+          const SizedBox(height: 3),
+          if (hasPkg) ...[
+            Row(children: [
+              Icon(Icons.workspace_premium_rounded, size: 13, color: statusColor),
+              const SizedBox(width: 4),
+              Text('Hết hạn: $expiryStr',
+                  style: TextStyle(fontSize: 12, color: statusColor,
+                      fontWeight: FontWeight.w600)),
+              if (daysLeft != null) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    daysLeft <= 0 ? 'Hết hạn' : 'Còn $daysLeft ngày',
+                    style: TextStyle(fontSize: 10, color: statusColor,
+                        fontWeight: FontWeight.w700),
+                  ),
+                ),
+              ],
+            ]),
+          ] else
+            Row(children: [
+              Icon(Icons.remove_circle_outline_rounded, size: 13,
+                  color: Colors.grey.shade400),
+              const SizedBox(width: 4),
+              Text('Chưa có gói dịch vụ',
+                  style: TextStyle(fontSize: 12, color: Colors.grey.shade400)),
+            ]),
+        ])),
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: (hasPkg ? statusColor : Colors.grey.shade300).withValues(alpha: 0.12),
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            hasPkg ? Icons.check_circle_rounded : Icons.cancel_rounded,
+            size: 18,
+            color: hasPkg ? statusColor : Colors.grey.shade400,
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Package Card ──────────────────────────────────────────────────────────────
 
 class _PackageCard extends StatelessWidget {
   final ServicePackage pkg;

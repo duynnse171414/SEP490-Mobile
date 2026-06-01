@@ -770,7 +770,7 @@ class _AddReminderSheetState extends State<_AddReminderSheet> {
         elderlyId: widget.elderlyProfile.id,
         title: _titleCtrl.text.trim(),
         reminderType: _reminderType,
-        scheduleTime: _scheduleDateTime!.toIso8601String(),
+        scheduleTime: _scheduleDateTime!.toUtc().toIso8601String(),
         repeatPattern: _repeatPattern,
         active: _active,
       ));

@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/api_service.dart';
 import '../utils/theme.dart';
 
 class CameraScreen extends StatefulWidget {
@@ -15,19 +16,20 @@ class CameraScreen extends StatefulWidget {
 }
 
 class _CameraScreenState extends State<CameraScreen> {
-  static const String _prefKey  = 'camera_base_url';
-  static const String _defaultUrl = 'http://192.168.1.1:8080';
+  static const String _prefKey    = 'camera_base_url';
+  static const int    _camPort    = 8080;
 
-  String   _baseUrl    = _defaultUrl;
+  String    _baseUrl     = '';
   Uint8List? _frameBytes;
-  bool     _isConnected = false;
-  bool     _hasError    = false;
+  bool      _isConnected = false;
+  bool      _hasError    = false;
+  bool      _scanning    = false;
   DateTime? _connectedAt;
-  bool     _showUrl    = false;
+  bool      _showUrl     = false;
   late TextEditingController _urlCtrl;
 
-  int      _frameCount = 0;
-  double   _fps        = 0;
+  int      _frameCount  = 0;
+  double   _fps         = 0;
   DateTime _lastFpsTime = DateTime.now();
 
   bool _looping = true;
@@ -35,13 +37,50 @@ class _CameraScreenState extends State<CameraScreen> {
   @override
   void initState() {
     super.initState();
-    _urlCtrl = TextEditingController(text: _baseUrl);
+    _urlCtrl = TextEditingController();
     _loadSavedUrl();
+  }
+
+  // ── Auto-discovery ────────────────────────────────────────────────
+
+  /// Danh sách IP cần thử (mạng robot 172.20.10.x + các mạng LAN phổ biến)
+  static List<String> get _candidateIPs {
+    final ips = <String>[];
+    // Mạng robot hotspot: 172.20.10.1 → 172.20.10.10
+    for (int i = 1; i <= 10; i++) { ips.add('172.20.10.$i'); }
+    // Mạng WiFi thông thường: 192.168.1.x và 192.168.0.x
+    for (int i = 1; i <= 20; i++) { ips.add('192.168.1.$i'); }
+    for (int i = 1; i <= 20; i++) { ips.add('192.168.0.$i'); }
+    return ips;
+  }
+
+  /// Thử kết nối 1 IP — trả về URL nếu có camera server
+  Future<String?> _probe(String ip) async {
+    try {
+      final res = await http
+          .get(Uri.parse('http://$ip:$_camPort/snapshot'))
+          .timeout(const Duration(milliseconds: 600));
+      if (res.statusCode == 200 && res.bodyBytes.length > 500) {
+        return 'http://$ip:$_camPort';
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Scan song song tất cả candidate IPs
+  Future<String?> _autoDiscover() async {
+    setState(() => _scanning = true);
+    try {
+      final results = await Future.wait(_candidateIPs.map(_probe));
+      return results.whereType<String>().firstOrNull;
+    } finally {
+      if (mounted) setState(() => _scanning = false);
+    }
   }
 
   @override
   void dispose() {
-    _looping = false;
+    _stopStream();
     _urlCtrl.dispose();
     super.dispose();
   }
@@ -52,8 +91,27 @@ class _CameraScreenState extends State<CameraScreen> {
     if (saved != null && saved.isNotEmpty) {
       _baseUrl = saved;
       _urlCtrl.text = saved;
+      ApiService.setRobotUrl(saved);
+      _startLoop();
+    } else {
+      // Chưa có URL → tự động scan tìm camera server
+      _runAutoDiscover();
     }
-    _startLoop();
+  }
+
+  Future<void> _runAutoDiscover() async {
+    setState(() { _scanning = true; _hasError = false; });
+    final found = await _autoDiscover();
+    if (!mounted) return;
+    if (found != null) {
+      _baseUrl = found;
+      _urlCtrl.text = found;
+      await _saveUrl(found);
+      ApiService.setRobotUrl(found);
+      _startLoop();
+    } else {
+      setState(() { _scanning = false; _hasError = true; });
+    }
   }
 
   Future<void> _saveUrl(String url) async {
@@ -66,6 +124,7 @@ class _CameraScreenState extends State<CameraScreen> {
     if (url.isEmpty) return;
     _baseUrl = url;
     _saveUrl(url);
+    ApiService.setRobotUrl(url);
     setState(() {
       _showUrl     = false;
       _isConnected = false;
@@ -76,59 +135,83 @@ class _CameraScreenState extends State<CameraScreen> {
     _startLoop();
   }
 
+  http.Client? _streamClient;
+
   void _startLoop() {
     _looping = true;
-    _fetchLoop();
+    _connectMjpeg();
   }
 
-  Future<void> _fetchLoop() async {
+  void _stopStream() {
+    _looping = false;
+    _streamClient?.close();
+    _streamClient = null;
+  }
+
+  /// Kết nối MJPEG stream liên tục — 1 connection, frames đẩy liên tục
+  Future<void> _connectMjpeg() async {
     while (mounted && _looping) {
-      await _fetchFrame();
+      _streamClient?.close();
+      _streamClient = http.Client();
+      try {
+        final req = http.Request('GET', Uri.parse('$_baseUrl/stream'));
+        final resp = await _streamClient!
+            .send(req)
+            .timeout(const Duration(seconds: 5));
+
+        if (resp.statusCode != 200) {
+          throw Exception('HTTP ${resp.statusCode}');
+        }
+
+        if (mounted) {
+          setState(() { _isConnected = true; _hasError = false; _connectedAt ??= DateTime.now(); });
+        }
+
+        // Parse JPEG frames từ multipart stream
+        final buf = <int>[];
+        await for (final chunk in resp.stream) {
+          if (!mounted || !_looping) break;
+          buf.addAll(chunk);
+
+          // Tìm và tách các JPEG frame (FF D8 FF ... FF D9)
+          while (true) {
+            final start = _indexOfBytes(buf, 0xFF, 0xD8);
+            if (start == -1) { buf.clear(); break; }
+            final end = _indexOfBytes(buf, 0xFF, 0xD9, start + 2);
+            if (end == -1) {
+              if (start > 0) buf.removeRange(0, start);
+              break;
+            }
+            final frame = Uint8List.fromList(buf.sublist(start, end + 2));
+            buf.removeRange(0, end + 2);
+
+            if (frame.length > 500 && mounted) {
+              _frameBytes = frame;
+              _frameCount++;
+              final now = DateTime.now();
+              final diff = now.difference(_lastFpsTime).inMilliseconds;
+              if (diff >= 1000) {
+                _fps = _frameCount * 1000 / diff;
+                _frameCount = 0;
+                _lastFpsTime = now;
+              }
+              setState(() {});
+            }
+          }
+        }
+      } catch (_) {
+        if (mounted) setState(() { _hasError = true; _isConnected = false; });
+        await Future.delayed(const Duration(seconds: 2));
+      }
     }
   }
 
-  Future<void> _fetchFrame() async {
-    try {
-      final url = '$_baseUrl/snapshot?t=${DateTime.now().millisecondsSinceEpoch}';
-      final response = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 2));
-
-      if (!mounted) return;
-
-      if (response.statusCode == 200 && response.bodyBytes.isNotEmpty) {
-        _frameBytes  = response.bodyBytes;
-        _isConnected = true;
-        _hasError    = false;
-        _connectedAt ??= DateTime.now();
-
-        _frameCount++;
-        final now  = DateTime.now();
-        final diff = now.difference(_lastFpsTime).inMilliseconds;
-        if (diff >= 1000) {
-          _fps         = _frameCount * 1000 / diff;
-          _frameCount  = 0;
-          _lastFpsTime = now;
-        }
-
-        if (mounted) setState(() {});
-      } else {
-        if (mounted) {
-          setState(() { _hasError = true; _isConnected = false; });
-          await Future.delayed(const Duration(seconds: 1));
-        }
-      }
-    } on TimeoutException {
-      if (mounted) {
-        setState(() { _hasError = true; _isConnected = false; });
-        await Future.delayed(const Duration(seconds: 1));
-      }
-    } catch (_) {
-      if (mounted) {
-        setState(() { _hasError = true; _isConnected = false; });
-        await Future.delayed(const Duration(seconds: 1));
-      }
+  /// Tìm vị trí 2 byte liên tiếp [b1, b2] trong list từ offset
+  int _indexOfBytes(List<int> buf, int b1, int b2, [int offset = 0]) {
+    for (int i = offset; i < buf.length - 1; i++) {
+      if (buf[i] == b1 && buf[i + 1] == b2) return i;
     }
+    return -1;
   }
 
   String get _elapsed {
@@ -348,7 +431,7 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
             TextButton(
               onPressed: () {
-                _looping = false;
+                _stopStream();
                 setState(() {
                   _isConnected = false;
                   _hasError    = false;
@@ -375,50 +458,71 @@ class _CameraScreenState extends State<CameraScreen> {
     return Container(
       color: Colors.black,
       child: Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const Icon(Icons.videocam_off_rounded,
-              color: AppTheme.danger, size: 52),
-          const SizedBox(height: 14),
-          const Text('Không kết nối được camera',
-              style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700)),
-          const SizedBox(height: 8),
-          Text(
-            'Kiểm tra:\n'
-            '• main.py đang chạy trên laptop\n'
-            '• Điện thoại và laptop cùng WiFi\n'
-            '• Nhấn ⚙️ để đổi IP laptop',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.45),
-                fontSize: 12,
-                height: 1.7),
-          ),
-          const SizedBox(height: 20),
-          ElevatedButton.icon(
-            onPressed: () => setState(() => _showUrl = true),
-            icon: const Icon(Icons.edit_rounded, size: 16),
-            label: const Text('Đổi IP laptop'),
-            style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.primary),
-          ),
-          const SizedBox(height: 8),
-          TextButton(
-            onPressed: () {
-              _looping = false;
-              setState(() {
-                _hasError    = false;
-                _frameBytes  = null;
-                _connectedAt = null;
-              });
-              _startLoop();
-            },
-            child: const Text('Thử lại',
-                style: TextStyle(color: AppTheme.textSecondary)),
-          ),
-        ]),
+        child: _scanning
+            ? Column(mainAxisSize: MainAxisSize.min, children: [
+                const CircularProgressIndicator(color: AppTheme.primary),
+                const SizedBox(height: 16),
+                const Text('Đang tìm camera trên mạng...',
+                    style: TextStyle(color: Colors.white, fontSize: 14)),
+                const SizedBox(height: 6),
+                Text('Quét tất cả thiết bị trong mạng LAN',
+                    style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.4),
+                        fontSize: 12)),
+              ])
+            : Column(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.videocam_off_rounded,
+                    color: AppTheme.danger, size: 52),
+                const SizedBox(height: 14),
+                const Text('Không kết nối được camera',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(height: 8),
+                Text(
+                  'Kiểm tra:\n'
+                  '• main.py đang chạy trên laptop\n'
+                  '• Điện thoại và laptop cùng WiFi\n'
+                  '• Nhấn ⚙️ để đổi IP laptop',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      fontSize: 12,
+                      height: 1.7),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: _runAutoDiscover,
+                  icon: const Icon(Icons.search_rounded, size: 16),
+                  label: const Text('Tự động tìm'),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primary),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () => setState(() => _showUrl = true),
+                  icon: const Icon(Icons.edit_rounded,
+                      size: 14, color: AppTheme.textSecondary),
+                  label: const Text('Nhập IP thủ công',
+                      style: TextStyle(
+                          color: AppTheme.textSecondary, fontSize: 12)),
+                ),
+                TextButton(
+                  onPressed: () {
+                    _stopStream();
+                    setState(() {
+                      _hasError    = false;
+                      _frameBytes  = null;
+                      _connectedAt = null;
+                    });
+                    _startLoop();
+                  },
+                  child: const Text('Thử lại',
+                      style: TextStyle(
+                          color: AppTheme.textSecondary, fontSize: 12)),
+                ),
+              ]),
       ),
     );
   }

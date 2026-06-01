@@ -67,6 +67,7 @@ class _AddElderlyScreenState extends State<AddElderlyScreen> {
       );
 
       await ApiService.createElderlyProfile(request);
+      ApiService.refreshRobotProfiles(); // cập nhật robot ngay không cần restart
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

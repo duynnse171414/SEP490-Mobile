@@ -2,6 +2,7 @@
 
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/constants.dart';
 import '../models/models.dart';
 
@@ -72,6 +73,75 @@ class ApiService {
   }
 
   // ─── AUTH ──────────────────────────────────────────────────────────────────
+  // ─── Robot server URL (same host as camera, port 8080) ────────────────────
+  static String? _robotBaseUrl;
+  static void setRobotUrl(String url) => _robotBaseUrl = url;
+
+  /// Thử probe 1 IP xem có robot server không
+  static Future<String?> _probeRobot(String ip) async {
+    try {
+      final res = await http.get(Uri.parse('http://$ip:8080/status'))
+          .timeout(const Duration(milliseconds: 600));
+      if (res.statusCode == 200) return 'http://$ip:8080';
+    } catch (_) {}
+    return null;
+  }
+
+  /// Scan subnet tìm robot server (dùng khi chưa có URL lưu)
+  static Future<String?> _discoverRobot() async {
+    final candidates = <String>[];
+    for (int i = 1; i <= 10; i++) { candidates.add('172.20.10.$i'); }
+    for (int i = 1; i <= 10; i++) { candidates.add('192.168.1.$i'); }
+    for (int i = 1; i <= 10; i++) { candidates.add('192.168.0.$i'); }
+    final results = await Future.wait(candidates.map(_probeRobot));
+    return results.whereType<String>().firstOrNull;
+  }
+
+  /// Gửi token lên robot server sau khi login (best-effort, không throw)
+  static Future<void> pushTokenToRobot(User user) async {
+    String? url = _robotBaseUrl;
+
+    // Nếu chưa có URL → tự scan tìm robot
+    if (url == null || url.isEmpty) {
+      url = await _discoverRobot();
+      if (url != null) {
+        _robotBaseUrl = url;
+        // Lưu lại để lần sau dùng
+        try {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('camera_base_url', url);
+        } catch (_) {}
+      }
+    }
+
+    if (url == null) return; // Không tìm thấy robot
+
+    try {
+      await http.post(
+        Uri.parse('$url/set-token'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'token': user.token,
+          'accountId': user.id,
+          'email': user.email,
+        }),
+      ).timeout(const Duration(seconds: 5));
+      // Token sent successfully
+    } catch (_) {}
+  }
+
+  /// Trigger robot refresh elderly profiles (best-effort)
+  static Future<void> refreshRobotProfiles() async {
+    final url = _robotBaseUrl;
+    if (url == null || url.isEmpty) return;
+    try {
+      await http.post(
+        Uri.parse('$url/refresh-profiles'),
+        headers: {'Content-Type': 'application/json'},
+      ).timeout(const Duration(seconds: 5));
+    } catch (_) {}
+  }
+
   static Future<User> login(String email, String password) async {
     final res = await http.post(
       Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.login}'),
@@ -81,6 +151,8 @@ class ApiService {
     final data = await _handleResponse(res);
     final user = User.fromJson(data);
     _currentAccountId = user.id;
+    // Gửi token lên robot (không chặn luồng chính)
+    pushTokenToRobot(user);
     return user;
   }
 
