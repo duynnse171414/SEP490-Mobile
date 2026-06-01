@@ -1,7 +1,9 @@
 // lib/screens/home_screen.dart
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/auth_provider.dart';
@@ -70,9 +72,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
     if (confirm == true && mounted) {
-      await context.read<AuthProvider>().logout();
-      Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const LoginScreen()));
+      final auth = context.read<AuthProvider>();
+      await auth.logout();
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const LoginScreen()));
+      }
     }
   }
 
@@ -155,16 +160,21 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(width: 4),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _loadProfiles,
-        child: _isLoading
-            ? const Center(child: CircularProgressIndicator())
-            : _error != null
-                ? _buildError()
-                : _profiles.isEmpty
-                    ? _buildEmpty()
-                    : _buildList(),
-      ),
+      body: Column(children: [
+        if (kIsWeb) const _RobotWebBanner(),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _loadProfiles,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? _buildError()
+                    : _profiles.isEmpty
+                        ? _buildEmpty()
+                        : _buildList(),
+          ),
+        ),
+      ]),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
           final result = await Navigator.push(context,
@@ -237,7 +247,7 @@ class _ElderlyCard extends StatelessWidget {
       final now = DateTime.now();
       int age = now.year - birth.year;
       if (now.month < birth.month ||
-          (now.month == birth.month && now.day < birth.day)) age--;
+          (now.month == birth.month && now.day < birth.day)) { age--; }
       return age;
     } catch (_) { return null; }
   }
@@ -326,6 +336,89 @@ class _ElderlyCard extends StatelessWidget {
           ]),
         ),
       ),
+    );
+  }
+}
+
+// ── Robot Web Banner (chỉ hiện khi chạy trên web/Netlify) ─────────────────────
+
+class _RobotWebBanner extends StatefulWidget {
+  const _RobotWebBanner();
+  @override
+  State<_RobotWebBanner> createState() => _RobotWebBannerState();
+}
+
+class _RobotWebBannerState extends State<_RobotWebBanner> {
+  String _robotIp = '';
+  bool _dismissed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedIp();
+  }
+
+  Future<void> _loadSavedIp() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('camera_base_url') ?? '';
+    if (mounted && saved.isNotEmpty) {
+      setState(() => _robotIp = saved);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+
+    final loginUrl = _robotIp.isNotEmpty
+        ? '${_robotIp.endsWith('/') ? _robotIp : '$_robotIp/'}login'
+        : 'http://<IP_LAPTOP>:8080/login';
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 10, 12, 2),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF3E0),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.shade300),
+      ),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.smart_toy_outlined, color: Colors.orange, size: 22),
+        const SizedBox(width: 10),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text('Kết nối Robot Alpha Mini',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13,
+                  color: Color(0xFFE65100))),
+          const SizedBox(height: 4),
+          const Text(
+            'App web không tự kết nối được robot. Mở trình duyệt '
+            'cùng mạng WiFi với laptop và đăng nhập tại:',
+            style: TextStyle(fontSize: 12, color: Color(0xFF6D4C41), height: 1.4),
+          ),
+          const SizedBox(height: 6),
+          GestureDetector(
+            onTap: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const CameraScreen())),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(loginUrl,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFFE65100),
+                      fontWeight: FontWeight.w700, fontFamily: 'monospace')),
+            ),
+          ),
+          const SizedBox(height: 4),
+          const Text('Nhấn vào Camera (⚙️) để nhập IP laptop trước',
+              style: TextStyle(fontSize: 11, color: Color(0xFF6D4C41))),
+        ])),
+        GestureDetector(
+          onTap: () => setState(() => _dismissed = true),
+          child: const Icon(Icons.close_rounded, size: 18, color: Colors.orange),
+        ),
+      ]),
     );
   }
 }

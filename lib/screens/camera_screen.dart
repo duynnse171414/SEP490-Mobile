@@ -2,10 +2,13 @@
 
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../services/auth_provider.dart';
 import '../utils/theme.dart';
 
 class CameraScreen extends StatefulWidget {
@@ -98,9 +101,18 @@ class _CameraScreenState extends State<CameraScreen> {
       _baseUrl = saved;
       _urlCtrl.text = saved;
       ApiService.setRobotUrl(saved);
+      // Trên web (HTTPS) không thể kết nối HTTP stream → hiện lỗi ngay
+      if (kIsWeb) {
+        setState(() { _hasError = true; _showUrl = true; });
+        return;
+      }
       _startLoop();
     } else {
-      // Chưa có URL → tự động scan tìm camera server
+      // Trên web không thể scan → hiện hướng dẫn nhập IP thủ công
+      if (kIsWeb) {
+        setState(() { _hasError = true; _showUrl = true; });
+        return;
+      }
       _runAutoDiscover();
     }
   }
@@ -139,7 +151,67 @@ class _CameraScreenState extends State<CameraScreen> {
       _frameBytes  = null;
       _connectedAt = null;
     });
+    // Khi chạy trên web (Netlify/HTTPS), không thể gọi HTTP từ browser —
+    // hiện dialog hướng dẫn user đăng nhập robot qua trình duyệt local.
+    if (kIsWeb) {
+      _showWebLoginGuide(url);
+      return;
+    }
+    // Native: push token lên robot ngay sau khi lưu IP
+    final user = context.read<AuthProvider>().user;
+    if (user != null) ApiService.pushTokenToRobot(user);
     _startLoop();
+  }
+
+  void _showWebLoginGuide(String baseUrl) {
+    final loginUrl = baseUrl.endsWith('/')
+        ? '${baseUrl}login'
+        : '$baseUrl/login';
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Row(children: [
+          Icon(Icons.info_outline_rounded, color: AppTheme.primary),
+          SizedBox(width: 8),
+          Expanded(child: Text('Kết nối Robot', overflow: TextOverflow.ellipsis)),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const Text(
+            'App web (Netlify) không thể kết nối trực tiếp tới robot qua HTTP.\n\n'
+            'Để đăng nhập robot, mở trình duyệt trên thiết bị cùng mạng WiFi với laptop:',
+            style: TextStyle(fontSize: 14, height: 1.5),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppTheme.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
+            ),
+            child: SelectableText(
+              loginUrl,
+              style: const TextStyle(
+                  fontSize: 14, fontWeight: FontWeight.w700,
+                  color: AppTheme.primary, fontFamily: 'monospace'),
+            ),
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            '• Đăng nhập bằng tài khoản FAMILYMEMBER\n'
+            '• Sau khi đăng nhập thành công, quay lại app này',
+            style: TextStyle(fontSize: 13, color: AppTheme.textSecondary, height: 1.6),
+          ),
+        ]),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Đã hiểu'),
+          ),
+        ],
+      ),
+    );
   }
 
   http.Client? _streamClient;
@@ -488,6 +560,31 @@ class _CameraScreenState extends State<CameraScreen> {
                         fontSize: 15,
                         fontWeight: FontWeight.w700)),
                 const SizedBox(height: 8),
+                if (kIsWeb) ...[
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 24),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+                    ),
+                    child: const Column(children: [
+                      Text('⚠️ App web không kết nối được HTTP',
+                          style: TextStyle(color: Colors.orange, fontSize: 13,
+                              fontWeight: FontWeight.w700)),
+                      SizedBox(height: 6),
+                      Text(
+                        'Bước 1: Nhấn ⚙️ → Nhập IP laptop (vd: http://172.20.10.2:8080)\n'
+                        'Bước 2: Mở link /login hiện ra → Đăng nhập robot\n'
+                        'Bước 3: Camera sẽ load được sau khi đăng nhập',
+                        style: TextStyle(color: Colors.white70, fontSize: 12, height: 1.6),
+                        textAlign: TextAlign.left,
+                      ),
+                    ]),
+                  ),
+                  const SizedBox(height: 12),
+                ] else
                 Text(
                   'Kiểm tra:\n'
                   '• main.py đang chạy trên laptop\n'
