@@ -43,14 +43,20 @@ class _CameraScreenState extends State<CameraScreen> {
 
   // ── Auto-discovery ────────────────────────────────────────────────
 
-  /// Danh sách IP cần thử (mạng robot 172.20.10.x + các mạng LAN phổ biến)
+  /// Danh sách IP cần thử (mạng robot + các mạng LAN/hotspot phổ biến)
   static List<String> get _candidateIPs {
     final ips = <String>[];
-    // Mạng robot hotspot: 172.20.10.1 → 172.20.10.10
-    for (int i = 1; i <= 10; i++) { ips.add('172.20.10.$i'); }
-    // Mạng WiFi thông thường: 192.168.1.x và 192.168.0.x
+    // Mạng robot hotspot: 172.20.10.1 → 172.20.10.15
+    for (int i = 1; i <= 15; i++) { ips.add('172.20.10.$i'); }
+    // Mạng WiFi thông thường
     for (int i = 1; i <= 20; i++) { ips.add('192.168.1.$i'); }
     for (int i = 1; i <= 20; i++) { ips.add('192.168.0.$i'); }
+    for (int i = 1; i <= 20; i++) { ips.add('192.168.43.$i'); } // Android hotspot
+    // Hotspot Windows (10.x.x.x)
+    for (int i = 1; i <= 10; i++) { ips.add('10.0.0.$i'); }
+    for (int i = 1; i <= 10; i++) { ips.add('10.0.1.$i'); }
+    for (int i = 1; i <= 10; i++) { ips.add('10.42.0.$i'); }   // Linux hotspot
+    for (int i = 1; i <= 10; i++) { ips.add('10.10.10.$i'); }
     return ips;
   }
 
@@ -110,7 +116,8 @@ class _CameraScreenState extends State<CameraScreen> {
       ApiService.setRobotUrl(found);
       _startLoop();
     } else {
-      setState(() { _scanning = false; _hasError = true; });
+      // Không tìm thấy → hiện ô nhập IP thủ công ngay
+      setState(() { _scanning = false; _hasError = true; _showUrl = true; });
     }
   }
 
@@ -138,6 +145,7 @@ class _CameraScreenState extends State<CameraScreen> {
   http.Client? _streamClient;
 
   void _startLoop() {
+    if (_baseUrl.isEmpty) return;
     _looping = true;
     _connectMjpeg();
   }

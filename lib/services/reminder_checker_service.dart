@@ -39,6 +39,8 @@ class ReminderCheckerService {
   void start() {
     if (_running) return;
     _running = true;
+    // Catchup reminders đã qua giờ hôm nay mà chưa có log
+    _catchupMissedReminders();
     // Chạy ngay lần đầu, rồi mỗi 60 giây
     _checkAll();
     _pollTimer = Timer.periodic(_pollInterval, (_) => _checkAll());
@@ -139,12 +141,64 @@ class ReminderCheckerService {
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
 
+  /// Khi app khởi động hoặc đầu ngày mới: tạo log + alert ngay cho những
+  /// reminder đã qua giờ hôm nay mà chưa có log (app bị đóng lúc đến giờ).
+  Future<void> _catchupMissedReminders() async {
+    if (!ApiService.currentAccountId.hasValue) return;
+    final now = DateTime.now();
+    final todayStr = _dateStr(now);
+
+    for (final profile in profiles) {
+      List<Reminder> reminders;
+      try {
+        reminders = await ApiService.getRemindersByElderly(profile.id);
+      } catch (_) {
+        continue;
+      }
+
+      for (final r in reminders) {
+        if (!r.active) continue;
+
+        final key = '${profile.id}_${r.id}_$todayStr';
+        if (_processedToday.contains(key)) continue;
+
+        final scheduledTime = _resolveTimeToday(r);
+        if (scheduledTime == null) continue;
+
+        final diff = now.difference(scheduledTime).inMinutes;
+        // Chỉ xử lý reminder đã qua cửa sổ bình thường (> 2 phút)
+        if (diff <= _windowMinutes || diff < 0) continue;
+
+        // Kiểm tra đã có log hôm nay chưa
+        final alreadyLogged = await _hasLogToday(r.id, profile.id, now);
+        if (alreadyLogged) {
+          _processedToday.add(key);
+          continue;
+        }
+
+        // Tạo log + alert ngay (missed)
+        _processedToday.add(key);
+        final logId = await ApiService.createReminderLog(r.id, profile.id);
+        if (logId != null) {
+          await ApiService.createAlert(
+            elderlyId: profile.id,
+            elderlyName: profile.name,
+            message: '${profile.name} chưa xác nhận: ${r.title}',
+            reminderLogId: logId,
+          );
+        }
+      }
+    }
+  }
+
   void _resetIfNewDay() {
     final today = DateTime.now();
     if (_lastResetDate == null || _lastResetDate!.day != today.day) {
       _processedToday.clear();
       _confirmedLogIds.clear();
       _lastResetDate = today;
+      // Đầu ngày mới: catchup reminder hôm qua bị bỏ lỡ (nếu có)
+      _catchupMissedReminders();
     }
   }
 

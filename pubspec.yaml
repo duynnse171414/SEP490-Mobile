@@ -32,6 +32,9 @@ dependencies:
   # Open URLs (payment, links)
   url_launcher: ^6.3.0
 
+  # QR code generator (payment)
+  qr_flutter: ^4.1.0
+
   # Speech to text - version mới tương thích Kotlin mới
   speech_to_text: ^7.0.0
 
