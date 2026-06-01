@@ -22,6 +22,7 @@
 cd alpha_mini_app
 flutter pub get
 flutter run
+flutter devices
 ```
 
 ## Cấu trúc dự án
