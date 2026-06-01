@@ -1,5 +1,5 @@
 [build]
-  command = "flutter/bin/flutter build web --release"
+  command = "git clone https://github.com/flutter/flutter.git --depth 1 --branch stable flutter && flutter/bin/flutter config --enable-web && flutter/bin/flutter pub get && flutter/bin/flutter build web --release"
   publish = "build/web"
 
 [build.environment]
