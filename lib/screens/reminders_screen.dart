@@ -6,6 +6,7 @@ import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/reminder_checker_service.dart';
 import '../utils/theme.dart';
+import 'payment_screen.dart';
 
 class RemindersScreen extends StatefulWidget {
   final ElderlyProfile elderlyProfile;
@@ -279,7 +280,11 @@ class _RemindersScreenState extends State<RemindersScreen>
             child: const Text('Đóng'),
           ),
           ElevatedButton.icon(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const PaymentScreen()));
+            },
             icon: const Icon(Icons.star_rounded, size: 18),
             label: const Text('Mua gói Premium'),
             style: ElevatedButton.styleFrom(

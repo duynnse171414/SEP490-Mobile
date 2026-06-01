@@ -1,6 +1,5 @@
 // lib/screens/home_screen.dart
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -160,21 +159,16 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(width: 4),
         ],
       ),
-      body: Column(children: [
-        if (kIsWeb) const _RobotWebBanner(),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: _loadProfiles,
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : _error != null
-                    ? _buildError()
-                    : _profiles.isEmpty
-                        ? _buildEmpty()
-                        : _buildList(),
-          ),
-        ),
-      ]),
+      body: RefreshIndicator(
+        onRefresh: _loadProfiles,
+        child: _isLoading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? _buildError()
+                : _profiles.isEmpty
+                    ? _buildEmpty()
+                    : _buildList(),
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () async {
           final result = await Navigator.push(context,
