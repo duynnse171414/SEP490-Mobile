@@ -1,9 +1,31 @@
 // lib/screens/exercises_screen.dart
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../utils/theme.dart';
+
+// ── Per-elderly action storage ─────────────────────────────────────────────────
+class _ElderlyActionStore {
+  static String _key(int elderlyId) => 'elderly_actions_$elderlyId';
+
+  static Future<Set<int>> getActionIds(int elderlyId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getStringList(_key(elderlyId)) ?? [];
+    return raw.map((s) => int.tryParse(s) ?? -1).where((i) => i >= 0).toSet();
+  }
+
+  static Future<void> addActionId(int elderlyId, int actionId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final ids = await getActionIds(elderlyId);
+    ids.add(actionId);
+    await prefs.setStringList(_key(elderlyId), ids.map((i) => i.toString()).toList());
+  }
+
+  static Future<int> count(int elderlyId) async =>
+      (await getActionIds(elderlyId)).length;
+}
 
 class ExercisesScreen extends StatefulWidget {
   final ElderlyProfile elderlyProfile;
@@ -13,23 +35,48 @@ class ExercisesScreen extends StatefulWidget {
   State<ExercisesScreen> createState() => _ExercisesScreenState();
 }
 
-class _ExercisesScreenState extends State<ExercisesScreen> {
-  List<ActionLibrary> _actions = [];
+class _ExercisesScreenState extends State<ExercisesScreen>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabCtrl;
+
+  // Toàn bộ catalog từ API
+  List<ActionLibrary> _catalog = [];
+  // Danh sách đã thêm cho elderly này (subset của catalog)
+  List<ActionLibrary> _myActions = [];
+
   bool _isLoading = true;
   String? _error;
-  final Set<int> _playingIds = {}; // đang gửi robot
+
+  final Set<int> _playingIds  = {};
+  final Set<int> _testingIds  = {};
+  final Set<int> _addingIds   = {};
+
+  static const int _freeLimit = 5;
 
   @override
   void initState() {
     super.initState();
+    _tabCtrl = TabController(length: 2, vsync: this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    _tabCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
     setState(() { _isLoading = true; _error = null; });
     try {
-      final list = await ApiService.getActionLibrary();
-      setState(() { _actions = list; _isLoading = false; });
+      final all = await ApiService.getActionLibrary();
+      final myIds = await _ElderlyActionStore.getActionIds(widget.elderlyProfile.id);
+
+      setState(() {
+        _catalog   = all;
+        _myActions = all.where((a) => myIds.contains(a.id)).toList();
+        _isLoading = false;
+      });
     } on ApiException catch (e) {
       setState(() { _error = e.message; _isLoading = false; });
     } catch (_) {
@@ -37,7 +84,239 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
     }
   }
 
-  static const int _freeActionLimit = 5;
+  // ── Test thử (gửi robot) ────────────────────────────────────────────────────
+  Future<void> _testAction(ActionLibrary action) async {
+    if (action.code == null || action.code!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Động tác này chưa có mã robot'),
+        backgroundColor: AppTheme.warning,
+      ));
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.accent.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.play_circle_outline_rounded, color: AppTheme.accent),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Text('Test: ${action.name}',
+              style: const TextStyle(fontSize: 16))),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 80, height: 80,
+            decoration: BoxDecoration(
+              color: AppTheme.primary.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.smart_toy_rounded, size: 46, color: AppTheme.primary),
+          ),
+          const SizedBox(height: 14),
+          if (action.description != null && action.description!.isNotEmpty)
+            Text(action.description!, textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, color: AppTheme.textSecondary)),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppTheme.primary.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              const Icon(Icons.code_rounded, size: 14, color: AppTheme.primary),
+              const SizedBox(width: 6),
+              Text(action.code!,
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13,
+                      color: AppTheme.primary, fontWeight: FontWeight.w700)),
+            ]),
+          ),
+          if (action.duration != null) ...[
+            const SizedBox(height: 6),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.timer_outlined, size: 14, color: AppTheme.textSecondary),
+              const SizedBox(width: 4),
+              Text('~${action.duration} giây',
+                  style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            ]),
+          ],
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.accent),
+            icon: const Icon(Icons.play_arrow_rounded),
+            label: const Text('Gửi Robot Test'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _testingIds.add(action.id));
+    try {
+      await ApiService.sendRobotAction(action.code!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            const Icon(Icons.smart_toy_rounded, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(child: Text('Robot đang test "${action.name}"!')),
+          ]),
+          backgroundColor: AppTheme.accent,
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    } on ApiException catch (e) {
+      if (mounted) { ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: AppTheme.danger)); }
+    } finally {
+      if (mounted) { setState(() => _testingIds.remove(action.id)); }
+    }
+  }
+
+  // ── Thêm vào danh sách của elderly ─────────────────────────────────────────
+  Future<void> _addToMyList(ActionLibrary action) async {
+    final alreadyAdded = _myActions.any((a) => a.id == action.id);
+    if (alreadyAdded) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('"${action.name}" đã có trong danh sách'),
+        backgroundColor: AppTheme.warning,
+      ));
+      return;
+    }
+
+    // Kiểm tra giới hạn per-elderly
+    final currentCount = await _ElderlyActionStore.count(widget.elderlyProfile.id);
+    if (currentCount >= _freeLimit) {
+      final hasPkg = await _hasActivePaidPackage();
+      if (!mounted) return;
+      if (!hasPkg) { _showUpgradeDialog(currentCount); return; }
+    }
+
+    setState(() => _addingIds.add(action.id));
+    try {
+      // Chỉ lưu mapping local — action đã có trong DB rồi, không tạo mới
+      await _ElderlyActionStore.addActionId(widget.elderlyProfile.id, action.id);
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            const Icon(Icons.check_circle_rounded, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(child: Text('Đã thêm "${action.name}" vào danh sách!')),
+          ]),
+          backgroundColor: AppTheme.success,
+        ));
+        _tabCtrl.animateTo(1);
+      }
+    } finally {
+      if (mounted) { setState(() => _addingIds.remove(action.id)); }
+    }
+  }
+
+  // ── Play từ danh sách của tôi ───────────────────────────────────────────────
+  Future<void> _playAction(ActionLibrary action) async {
+    if (action.code == null || action.code!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Động tác này chưa có mã code robot'),
+        backgroundColor: AppTheme.warning,
+      ));
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+                color: AppTheme.primary.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10)),
+            child: const Icon(Icons.smart_toy_rounded, color: AppTheme.primary),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(child: Text('Gửi đến Robot', style: TextStyle(fontSize: 16))),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 80, height: 80,
+            decoration: BoxDecoration(
+              color: AppTheme.primary.withValues(alpha: 0.08),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.smart_toy_rounded, size: 48, color: AppTheme.primary),
+          ),
+          const SizedBox(height: 16),
+          Text('Robot sẽ thực hiện:\n"${action.name}"',
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          if (action.code != null) ...[
+            const SizedBox(height: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: AppTheme.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text('Code: ${action.code}',
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 13,
+                      color: AppTheme.primary, fontWeight: FontWeight.w700)),
+            ),
+          ],
+          if (action.duration != null) ...[
+            const SizedBox(height: 6),
+            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.timer_outlined, size: 14, color: AppTheme.textSecondary),
+              const SizedBox(width: 4),
+              Text('~${action.duration} giây',
+                  style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
+            ]),
+          ],
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+            icon: const Icon(Icons.play_arrow_rounded),
+            label: const Text('Thực hiện'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+
+    setState(() => _playingIds.add(action.id));
+    try {
+      await ApiService.sendRobotAction(action.code!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            const Icon(Icons.smart_toy_rounded, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(child: Text('Robot đang thực hiện "${action.name}"!')),
+          ]),
+          backgroundColor: AppTheme.primary,
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    } on ApiException catch (e) {
+      if (mounted) { ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: AppTheme.danger)); }
+    } finally {
+      if (mounted) { setState(() => _playingIds.remove(action.id)); }
+    }
+  }
 
   Future<bool> _hasActivePaidPackage() async {
     try {
@@ -54,25 +333,7 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
     }
   }
 
-  Future<void> _addAction() async {
-    if (_actions.length >= _freeActionLimit) {
-      final hasPkg = await _hasActivePaidPackage();
-      if (!mounted) return;
-      if (!hasPkg) {
-        _showUpgradeDialog();
-        return;
-      }
-    }
-    final result = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const _AddActionSheet(),
-    );
-    if (result == true) _load();
-  }
-
-  void _showUpgradeDialog() {
+  void _showUpgradeDialog(int currentCount) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -87,42 +348,30 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
             child: const Icon(Icons.lock_rounded, color: Colors.amber, size: 24),
           ),
           const SizedBox(width: 12),
-          const Text('Giới hạn động tác', style: TextStyle(fontSize: 18)),
+          const Text('Đã đủ giới hạn', style: TextStyle(fontSize: 18)),
         ]),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Bạn đã sử dụng hết $_freeActionLimit động tác miễn phí.',
-              style: const TextStyle(fontSize: 15),
+        content: Column(mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text('${widget.elderlyProfile.name} đã có $currentCount/$_freeLimit động tác miễn phí.',
+              style: const TextStyle(fontSize: 15)),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade50,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.amber.shade200),
             ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.amber.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.amber.shade200),
-              ),
-              child: const Row(children: [
-                Icon(Icons.star_rounded, color: Colors.amber, size: 20),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Nâng cấp lên gói Premium để thêm không giới hạn động tác!',
-                    style: TextStyle(fontSize: 13, color: Colors.black87),
-                  ),
-                ),
-              ]),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Đóng'),
+            child: const Row(children: [
+              Icon(Icons.star_rounded, color: Colors.amber, size: 20),
+              SizedBox(width: 8),
+              Expanded(child: Text('Nâng cấp gói Premium để thêm không giới hạn!',
+                  style: TextStyle(fontSize: 13, color: Colors.black87))),
+            ]),
           ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Đóng')),
           ElevatedButton.icon(
             onPressed: () => Navigator.pop(context),
             icon: const Icon(Icons.star_rounded, size: 18),
@@ -137,565 +386,436 @@ class _ExercisesScreenState extends State<ExercisesScreen> {
     );
   }
 
-  Future<void> _playAction(ActionLibrary action) async {
-    if (action.code == null || action.code!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Động tác này chưa có mã code robot'),
-        backgroundColor: AppTheme.warning,
-      ));
-      return;
-    }
-
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Row(children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-                color: AppTheme.robotBlue.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10)),
-            child: const Icon(Icons.smart_toy_rounded, color: AppTheme.robotBlue),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(child: Text('Gửi đến Robot Alpha Mini',
-              style: TextStyle(fontSize: 16))),
-        ]),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Robot animation placeholder
-          Container(
-            width: 80, height: 80,
-            decoration: BoxDecoration(
-              color: AppTheme.robotBlue.withOpacity(0.08),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(Icons.smart_toy_rounded,
-                size: 48, color: AppTheme.robotBlue),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Robot sẽ thực hiện:\n"${action.name}"',
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-          ),
-          if (action.code != null) ...[
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppTheme.robotBlue.withOpacity(0.08),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text('Code: ${action.code}',
-                  style: const TextStyle(
-                      fontFamily: 'monospace', fontSize: 13,
-                      color: AppTheme.robotBlue, fontWeight: FontWeight.w700)),
-            ),
-          ],
-          if (action.duration != null) ...[
-            const SizedBox(height: 6),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              const Icon(Icons.timer_outlined, size: 14, color: AppTheme.textSecondary),
-              const SizedBox(width: 4),
-              Text('Thời gian: ${action.duration}s',
-                  style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-            ]),
-          ],
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Hủy')),
-          ElevatedButton.icon(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.robotBlue),
-            icon: const Icon(Icons.play_arrow_rounded),
-            label: const Text('Thực hiện'),
-          ),
-        ],
-      ),
-    );
-
-    if (ok != true) return;
-
-    setState(() => _playingIds.add(action.id));
-    try {
-      await ApiService.sendRobotAction(action.code!);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Row(children: [
-            const Icon(Icons.smart_toy_rounded, color: Colors.white),
-            const SizedBox(width: 10),
-            Expanded(child: Text('Robot đang thực hiện "${action.name}"!')),
-          ]),
-          backgroundColor: AppTheme.robotBlue,
-          duration: const Duration(seconds: 3),
-        ));
-      }
-    } on ApiException catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: AppTheme.danger));
-    } finally {
-      if (mounted) setState(() => _playingIds.remove(action.id));
-    }
-  }
-
-  Future<void> _deleteAction(ActionLibrary action) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Xóa động tác'),
-        content: Text('Xóa "${action.name}" khỏi thư viện?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-              child: const Text('Xóa')),
-        ],
-      ),
-    );
-    if (ok == true) {
-      try {
-        await ApiService.deleteActionLibrary(action.id);
-        _load();
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Đã xóa'), backgroundColor: AppTheme.success));
-      } on ApiException catch (e) {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.message), backgroundColor: AppTheme.danger));
-      }
-    }
-  }
-
+  // ── Build ───────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Stack(children: [
-      Column(children: [
-        // Header info
-        Container(
-          width: double.infinity,
-          margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppTheme.robotBlue.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppTheme.robotBlue.withOpacity(0.2)),
-          ),
-          child: Row(children: [
-            const Icon(Icons.smart_toy_rounded, color: AppTheme.robotBlue, size: 28),
-            const SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Thư viện động tác Robot Alpha Mini',
-                  style: TextStyle(fontWeight: FontWeight.w700,
-                      color: AppTheme.robotBlue, fontSize: 14)),
-              Text('Nhấn ▶ để robot thực hiện động tác cho ${widget.elderlyProfile.name}',
-                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-            ])),
-          ]),
+    return Column(children: [
+      Container(
+        color: Colors.white,
+        child: TabBar(
+          controller: _tabCtrl,
+          indicatorColor: AppTheme.primary,
+          labelColor: AppTheme.primary,
+          unselectedLabelColor: AppTheme.textSecondary,
+          labelStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+          tabs: [
+            const Tab(icon: Icon(Icons.explore_rounded, size: 18), text: 'Khám phá'),
+            Tab(
+              icon: const Icon(Icons.bookmark_rounded, size: 18),
+              text: _isLoading ? 'Của tôi' : 'Của tôi (${_myActions.length})',
+            ),
+          ],
         ),
-
-        // List
-        Expanded(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null
-                  ? _buildError()
-                  : _actions.isEmpty
-                      ? _buildEmpty()
-                      : RefreshIndicator(
-                          onRefresh: _load,
-                          child: ListView.builder(
-                            padding: const EdgeInsets.fromLTRB(12, 10, 12, 100),
-                            itemCount: _actions.length,
-                            itemBuilder: (_, i) => _ActionCard(
-                              action: _actions[i],
-                              isPlaying: _playingIds.contains(_actions[i].id),
-                              onPlay: () => _playAction(_actions[i]),
-                              onDelete: () => _deleteAction(_actions[i]),
-                            ),
-                          ),
-                        ),
-        ),
-      ]),
-
-      // FAB
-      Positioned(
-        bottom: 16, right: 16,
-        child: FloatingActionButton.extended(
-          heroTag: 'exercise_fab',
-          onPressed: _addAction,
-          icon: const Icon(Icons.add),
-          label: const Text('Thêm động tác'),
-          backgroundColor: AppTheme.robotBlue,
-          foregroundColor: Colors.white,
+      ),
+      Expanded(
+        child: TabBarView(
+          controller: _tabCtrl,
+          children: [_buildCatalogTab(), _buildMyTab()],
         ),
       ),
     ]);
   }
 
-  Widget _buildEmpty() {
-    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Icon(Icons.smart_toy_outlined, size: 72, color: AppTheme.textSecondary.withOpacity(0.3)),
-      const SizedBox(height: 16),
-      const Text('Thư viện trống',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: AppTheme.textSecondary)),
-      const SizedBox(height: 8),
-      const Text('Thêm động tác để robot thực hiện',
-          style: TextStyle(color: AppTheme.textSecondary)),
-    ]));
-  }
-
-  Widget _buildError() {
-    return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      const Icon(Icons.error_outline, color: AppTheme.danger, size: 48),
-      const SizedBox(height: 8),
-      Text(_error!, style: const TextStyle(color: AppTheme.textSecondary)),
-      const SizedBox(height: 12),
-      ElevatedButton(onPressed: _load, child: const Text('Thử lại')),
-    ]));
-  }
-}
-
-// ── Action Card ────────────────────────────────────────────────────────────────
-
-class _ActionCard extends StatelessWidget {
-  final ActionLibrary action;
-  final bool isPlaying;
-  final VoidCallback onPlay;
-  final VoidCallback onDelete;
-
-  const _ActionCard({
-    required this.action,
-    required this.isPlaying,
-    required this.onPlay,
-    required this.onDelete,
-  });
-
-  Color get _typeColor {
-    switch (action.type?.toUpperCase()) {
-      case 'STRETCHING':  return const Color(0xFF4CAF50);
-      case 'STRENGTH':    return const Color(0xFFFF5722);
-      case 'BALANCE':     return const Color(0xFF9C27B0);
-      case 'CARDIO':      return const Color(0xFFE91E63);
-      case 'RELAXATION':  return const Color(0xFF00BCD4);
-      default:            return AppTheme.robotBlue;
+  // ── Catalog tab ─────────────────────────────────────────────────────────────
+  Widget _buildCatalogTab() {
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) {
+      return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        const Icon(Icons.error_outline, color: AppTheme.danger, size: 48),
+        const SizedBox(height: 8),
+        Text(_error!, style: const TextStyle(color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        ElevatedButton(onPressed: _load, child: const Text('Thử lại')),
+      ]));
     }
-  }
-
-  String get _typeLabel {
-    switch (action.type?.toUpperCase()) {
-      case 'STRETCHING':  return 'Khởi động';
-      case 'STRENGTH':    return 'Tăng lực';
-      case 'BALANCE':     return 'Thăng bằng';
-      case 'CARDIO':      return 'Tim mạch';
-      case 'RELAXATION':  return 'Thư giãn';
-      default:            return action.type ?? 'Khác';
+    if (_catalog.isEmpty) {
+      return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(Icons.smart_toy_outlined, size: 72,
+            color: AppTheme.textSecondary.withValues(alpha: 0.3)),
+        const SizedBox(height: 16),
+        const Text('Chưa có động tác nào trong thư viện',
+            style: TextStyle(fontSize: 16, color: AppTheme.textSecondary)),
+        const SizedBox(height: 12),
+        ElevatedButton.icon(
+          onPressed: _load,
+          icon: const Icon(Icons.refresh_rounded),
+          label: const Text('Tải lại'),
+        ),
+      ]));
     }
-  }
 
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: isPlaying
-            ? const BorderSide(color: AppTheme.robotBlue, width: 2)
-            : BorderSide.none,
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            // Icon
-            Container(
-              width: 52, height: 52,
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [AppTheme.robotBlue, AppTheme.robotBlue.withBlue(255)],
-                  begin: Alignment.topLeft, end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: const Icon(Icons.directions_run_rounded, color: Colors.white, size: 26),
-            ),
-            const SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(action.name,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-              const SizedBox(height: 4),
-              Row(children: [
-                // Type badge
-                if (action.type != null)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: _typeColor.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(_typeLabel,
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
-                            color: _typeColor)),
-                  ),
-                // Code badge
-                if (action.code != null) ...[
-                  const SizedBox(width: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: AppTheme.robotBlue.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(action.code!,
-                        style: const TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.w700,
-                            color: AppTheme.robotBlue, fontFamily: 'monospace')),
-                  ),
-                ],
-              ]),
-            ])),
-            // Delete button
-            IconButton(
-              icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.danger, size: 20),
-              onPressed: onDelete,
-              style: IconButton.styleFrom(
-                backgroundColor: AppTheme.danger.withOpacity(0.08),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-            ),
-          ]),
-
-          if (action.description != null && action.description!.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Text(action.description!,
-                style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary),
-                maxLines: 2, overflow: TextOverflow.ellipsis),
-          ],
-
-          if (action.duration != null) ...[
-            const SizedBox(height: 8),
-            Row(children: [
-              const Icon(Icons.timer_outlined, size: 14, color: AppTheme.textSecondary),
-              const SizedBox(width: 4),
-              Text('${action.duration} giây',
-                  style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary)),
-            ]),
-          ],
-
-          const SizedBox(height: 14),
-
-          // Play button
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: isPlaying ? null : onPlay,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: isPlaying ? Colors.grey : AppTheme.robotBlue,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-              ),
-              icon: isPlaying
-                  ? const SizedBox(
-                      width: 16, height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                  : const Icon(Icons.play_arrow_rounded, size: 22),
-              label: Text(
-                isPlaying ? 'Đang gửi đến robot...' : 'Thực hiện trên Robot',
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
-              ),
-            ),
-          ),
+    return Column(children: [
+      Container(
+        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: AppTheme.accent.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppTheme.accent.withValues(alpha: 0.2)),
+        ),
+        child: const Row(children: [
+          Icon(Icons.info_outline_rounded, color: AppTheme.accent, size: 18),
+          SizedBox(width: 10),
+          Expanded(child: Text(
+            'Nhấn Test để robot thực hiện thử — nếu phù hợp thì Thêm vào',
+            style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+          )),
         ]),
+      ),
+      Expanded(
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: ListView.builder(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 20),
+            itemCount: _catalog.length,
+            itemBuilder: (_, i) {
+              final action = _catalog[i];
+              final added   = _myActions.any((a) => a.id == action.id);
+              final testing = _testingIds.contains(action.id);
+              final adding  = _addingIds.contains(action.id);
+              return _CatalogCard(
+                action: action,
+                alreadyAdded: added,
+                isTesting: testing,
+                isAdding: adding,
+                onTest: () => _testAction(action),
+                onAdd: added ? null : () => _addToMyList(action),
+              );
+            },
+          ),
+        ),
+      ),
+    ]);
+  }
+
+  // ── My actions tab ──────────────────────────────────────────────────────────
+  Widget _buildMyTab() {
+    if (_isLoading) return const Center(child: CircularProgressIndicator());
+    if (_myActions.isEmpty) {
+      return Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+        Icon(Icons.bookmark_border_rounded, size: 72,
+            color: AppTheme.textSecondary.withValues(alpha: 0.3)),
+        const SizedBox(height: 16),
+        const Text('Chưa có động tác nào',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600,
+                color: AppTheme.textSecondary)),
+        const SizedBox(height: 8),
+        const Text('Sang tab Khám phá để chọn động tác phù hợp',
+            style: TextStyle(color: AppTheme.textSecondary)),
+        const SizedBox(height: 20),
+        ElevatedButton.icon(
+          onPressed: () => _tabCtrl.animateTo(0),
+          icon: const Icon(Icons.explore_rounded),
+          label: const Text('Khám phá ngay'),
+        ),
+      ]));
+    }
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 20),
+        itemCount: _myActions.length,
+        itemBuilder: (_, i) => _MyActionCard(
+          action: _myActions[i],
+          isPlaying: _playingIds.contains(_myActions[i].id),
+          onPlay: () => _playAction(_myActions[i]),
+        ),
       ),
     );
   }
 }
 
-// ── Add Action Bottom Sheet ────────────────────────────────────────────────────
+// ── Catalog Card ───────────────────────────────────────────────────────────────
+class _CatalogCard extends StatelessWidget {
+  final ActionLibrary action;
+  final bool alreadyAdded;
+  final bool isTesting;
+  final bool isAdding;
+  final VoidCallback onTest;
+  final VoidCallback? onAdd;
 
-class _AddActionSheet extends StatefulWidget {
-  const _AddActionSheet();
+  const _CatalogCard({
+    required this.action, required this.alreadyAdded,
+    required this.isTesting, required this.isAdding,
+    required this.onTest, this.onAdd,
+  });
 
-  @override
-  State<_AddActionSheet> createState() => _AddActionSheetState();
-}
-
-class _AddActionSheetState extends State<_AddActionSheet> {
-  final _formKey = GlobalKey<FormState>();
-  final _nameCtrl = TextEditingController();
-  final _codeCtrl = TextEditingController();
-  final _descCtrl = TextEditingController();
-  final _durationCtrl = TextEditingController();
-  String? _type;
-  bool _isLoading = false;
-
-  @override
-  void dispose() {
-    _nameCtrl.dispose(); _codeCtrl.dispose();
-    _descCtrl.dispose(); _durationCtrl.dispose();
-    super.dispose();
+  Color get _typeColor {
+    switch ((action.type ?? '').toUpperCase()) {
+      case 'STRETCHING': return const Color(0xFF0D9488);
+      case 'STRENGTH':   return const Color(0xFFEF4444);
+      case 'BALANCE':    return const Color(0xFF8B5CF6);
+      case 'CARDIO':     return const Color(0xFFEC4899);
+      case 'RELAXATION': return const Color(0xFF22C55E);
+      default:           return AppTheme.primary;
+    }
   }
 
-  Future<void> _submit() async {
-    if (!_formKey.currentState!.validate()) return;
-    setState(() => _isLoading = true);
-    try {
-      await ApiService.createActionLibrary(ActionLibrary(
-        id: 0,
-        name: _nameCtrl.text.trim(),
-        code: _codeCtrl.text.trim().isEmpty ? null : _codeCtrl.text.trim(),
-        type: _type,
-        description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
-        duration: _durationCtrl.text.isEmpty ? null : int.tryParse(_durationCtrl.text),
-      ));
-      if (mounted) Navigator.pop(context, true);
-    } on ApiException catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: AppTheme.danger));
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+  String get _typeLabel {
+    switch ((action.type ?? '').toUpperCase()) {
+      case 'STRETCHING': return 'Khởi động';
+      case 'STRENGTH':   return 'Tăng lực';
+      case 'BALANCE':    return 'Thăng bằng';
+      case 'CARDIO':     return 'Tim mạch';
+      case 'RELAXATION': return 'Thư giãn';
+      default:           return action.type ?? 'Khác';
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: EdgeInsets.fromLTRB(20, 20, 20, MediaQuery.of(context).viewInsets.bottom + 20),
-      decoration: const BoxDecoration(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: alreadyAdded
+              ? AppTheme.success.withValues(alpha: 0.4)
+              : const Color(0xFFCCFBF1),
+        ),
       ),
-      child: Form(
-        key: _formKey,
-        child: SingleChildScrollView(
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-            Center(child: Container(
-                width: 40, height: 4,
-                decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(2)))),
-            const SizedBox(height: 16),
-            Row(children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                    color: AppTheme.robotBlue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10)),
-                child: const Icon(Icons.library_add_rounded, color: AppTheme.robotBlue),
-              ),
-              const SizedBox(width: 12),
-              const Text('Thêm vào thư viện',
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
-            ]),
-            const SizedBox(height: 20),
-
-            // name
-            TextFormField(
-              controller: _nameCtrl,
-              decoration: const InputDecoration(
-                  labelText: 'Tên động tác *',
-                  prefixIcon: Icon(Icons.directions_run_rounded)),
-              validator: (v) => v == null || v.isEmpty ? 'Vui lòng nhập tên' : null,
-            ),
-            const SizedBox(height: 12),
-
-            // Robot code (quan trọng để gửi robot)
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
             Container(
-              padding: const EdgeInsets.all(12),
+              width: 46, height: 46,
               decoration: BoxDecoration(
-                color: AppTheme.robotBlue.withOpacity(0.05),
+                color: _typeColor.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppTheme.robotBlue.withOpacity(0.25)),
               ),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Row(children: [
-                  const Icon(Icons.smart_toy_rounded, size: 16, color: AppTheme.robotBlue),
-                  const SizedBox(width: 6),
-                  const Text('Mã lệnh Robot *',
-                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
-                          color: AppTheme.robotBlue)),
-                  const SizedBox(width: 6),
+              child: Icon(Icons.directions_run_rounded, color: _typeColor, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(children: [
+                Expanded(child: Text(action.name,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                        color: AppTheme.textPrimary))),
+                if (alreadyAdded)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: AppTheme.warning.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(4),
+                      color: AppTheme.success.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Text('Cần để Play',
-                        style: TextStyle(fontSize: 10, color: AppTheme.warning,
-                            fontWeight: FontWeight.w700)),
+                    child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                      Icon(Icons.check_circle_rounded, size: 12, color: AppTheme.success),
+                      SizedBox(width: 4),
+                      Text('Đã thêm', style: TextStyle(
+                          fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.success)),
+                    ]),
                   ),
-                ]),
-                const SizedBox(height: 8),
-                TextFormField(
-                  controller: _codeCtrl,
-                  decoration: const InputDecoration(
-                      labelText: 'Code',
-                      hintText: 'Ví dụ: WAVE_HAND, NOD_HEAD, SIT_DOWN',
-                      prefixIcon: Icon(Icons.code_rounded)),
-                ),
               ]),
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 4),
+              Row(children: [
+                if (action.type != null) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: _typeColor.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: Text(_typeLabel, style: TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w700, color: _typeColor)),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                if (action.code != null) ...[
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primary.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: Text(action.code!,
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700,
+                            color: AppTheme.primary, fontFamily: 'monospace')),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                if (action.duration != null) ...[
+                  const Icon(Icons.timer_outlined, size: 12, color: AppTheme.textSecondary),
+                  const SizedBox(width: 3),
+                  Text('${action.duration}s',
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                ],
+              ]),
+            ])),
+          ]),
 
-            // type
-            DropdownButtonFormField<String>(
-              value: _type,
-              decoration: const InputDecoration(
-                  labelText: 'Loại động tác',
-                  prefixIcon: Icon(Icons.category_outlined)),
-              items: const [
-                DropdownMenuItem(value: 'STRETCHING', child: Text('Khởi động')),
-                DropdownMenuItem(value: 'STRENGTH', child: Text('Tăng lực')),
-                DropdownMenuItem(value: 'BALANCE', child: Text('Thăng bằng')),
-                DropdownMenuItem(value: 'CARDIO', child: Text('Tim mạch')),
-                DropdownMenuItem(value: 'RELAXATION', child: Text('Thư giãn')),
-              ],
-              onChanged: (v) => setState(() => _type = v),
-            ),
-            const SizedBox(height: 12),
+          if (action.description != null && action.description!.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(action.description!,
+                style: const TextStyle(fontSize: 13, color: AppTheme.textSecondary, height: 1.4),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+          ],
 
-            // description
-            TextFormField(
-              controller: _descCtrl,
-              maxLines: 2,
-              decoration: const InputDecoration(
-                  labelText: 'Mô tả động tác',
-                  prefixIcon: Icon(Icons.notes_rounded),
-                  alignLabelWithHint: true),
-            ),
-            const SizedBox(height: 12),
+          const SizedBox(height: 12),
 
-            // duration
-            TextFormField(
-              controller: _durationCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                  labelText: 'Thời gian thực hiện (giây)',
-                  prefixIcon: Icon(Icons.timer_outlined)),
+          Row(children: [
+            // Test button
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: isTesting ? null : onTest,
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: AppTheme.accent.withValues(alpha: 0.6)),
+                  foregroundColor: AppTheme.accent,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                icon: isTesting
+                    ? const SizedBox(width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.accent))
+                    : const Icon(Icons.play_circle_outline_rounded, size: 18),
+                label: Text(isTesting ? 'Đang test...' : 'Test thử',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              ),
             ),
-            const SizedBox(height: 24),
-
-            SizedBox(
-              width: double.infinity,
+            const SizedBox(width: 8),
+            // Add button
+            Expanded(
               child: ElevatedButton.icon(
-                onPressed: _isLoading ? null : _submit,
+                onPressed: (alreadyAdded || isAdding) ? null : onAdd,
                 style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    backgroundColor: AppTheme.robotBlue),
-                icon: _isLoading
-                    ? const SizedBox(width: 16, height: 16,
+                  backgroundColor: alreadyAdded ? AppTheme.success : AppTheme.primary,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  disabledBackgroundColor: alreadyAdded
+                      ? AppTheme.success.withValues(alpha: 0.6) : null,
+                  disabledForegroundColor: Colors.white,
+                ),
+                icon: isAdding
+                    ? const SizedBox(width: 14, height: 14,
                         child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Icon(Icons.save_rounded),
-                label: const Text('LƯU VÀO THƯ VIỆN',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
+                    : Icon(alreadyAdded ? Icons.check_rounded : Icons.add_rounded, size: 18),
+                label: Text(
+                  isAdding ? 'Đang thêm...' : alreadyAdded ? 'Đã thêm' : 'Thêm vào',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
               ),
             ),
           ]),
+        ]),
+      ),
+    );
+  }
+}
+
+// ── My Action Card ─────────────────────────────────────────────────────────────
+class _MyActionCard extends StatelessWidget {
+  final ActionLibrary action;
+  final bool isPlaying;
+  final VoidCallback onPlay;
+
+  const _MyActionCard({required this.action, required this.isPlaying, required this.onPlay});
+
+  Color get _typeColor {
+    switch ((action.type ?? '').toUpperCase()) {
+      case 'STRETCHING': return const Color(0xFF0D9488);
+      case 'STRENGTH':   return const Color(0xFFEF4444);
+      case 'BALANCE':    return const Color(0xFF8B5CF6);
+      case 'CARDIO':     return const Color(0xFFEC4899);
+      case 'RELAXATION': return const Color(0xFF22C55E);
+      default:           return AppTheme.primary;
+    }
+  }
+
+  String get _typeLabel {
+    switch ((action.type ?? '').toUpperCase()) {
+      case 'STRETCHING': return 'Khởi động';
+      case 'STRENGTH':   return 'Tăng lực';
+      case 'BALANCE':    return 'Thăng bằng';
+      case 'CARDIO':     return 'Tim mạch';
+      case 'RELAXATION': return 'Thư giãn';
+      default:           return action.type ?? 'Khác';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isPlaying
+              ? AppTheme.primary.withValues(alpha: 0.5)
+              : const Color(0xFFCCFBF1),
+          width: isPlaying ? 2 : 1,
         ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Row(children: [
+          Container(
+            width: 46, height: 46,
+            decoration: BoxDecoration(
+              color: _typeColor.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.directions_run_rounded, color: _typeColor, size: 24),
+          ),
+          const SizedBox(width: 12),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(action.name,
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700,
+                    color: AppTheme.textPrimary)),
+            const SizedBox(height: 4),
+            Row(children: [
+              if (action.type != null) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: _typeColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: Text(_typeLabel, style: TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700, color: _typeColor)),
+                ),
+                const SizedBox(width: 6),
+              ],
+              if (action.code != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppTheme.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(5),
+                  ),
+                  child: Text(action.code!, style: const TextStyle(
+                      fontSize: 11, fontWeight: FontWeight.w700,
+                      color: AppTheme.primary, fontFamily: 'monospace')),
+                ),
+            ]),
+            if (action.description != null && action.description!.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(action.description!, maxLines: 1, overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+            ],
+          ])),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 90,
+            child: ElevatedButton.icon(
+              onPressed: isPlaying ? null : onPlay,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isPlaying ? Colors.grey : AppTheme.primary,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+              icon: isPlaying
+                  ? const SizedBox(width: 14, height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  : const Icon(Icons.play_arrow_rounded, size: 18),
+              label: Text(isPlaying ? '...' : 'Play',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+            ),
+          ),
+        ]),
       ),
     );
   }

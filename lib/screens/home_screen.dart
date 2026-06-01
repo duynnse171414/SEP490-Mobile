@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/auth_provider.dart';
+import '../services/reminder_checker_service.dart';
 import '../utils/theme.dart';
 import 'login_screen.dart';
 import 'camera_screen.dart';
@@ -15,7 +16,6 @@ import 'payment_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
-
   @override
   State<HomeScreen> createState() => _HomeScreenState();
 }
@@ -28,30 +28,27 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    ReminderCheckerService.instance.start();
     _loadProfiles();
   }
 
+  @override
+  void dispose() {
+    // Không stop service khi rời HomeScreen — giữ chạy ngầm cả session
+    super.dispose();
+  }
+
   Future<void> _loadProfiles() async {
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+    setState(() { _isLoading = true; _error = null; });
     try {
       final profiles = await ApiService.getElderlyProfiles();
-      setState(() {
-        _profiles = profiles;
-        _isLoading = false;
-      });
+      // Cập nhật danh sách elderly cho service kiểm tra reminder
+      ReminderCheckerService.instance.profiles = profiles;
+      setState(() { _profiles = profiles; _isLoading = false; });
     } on ApiException catch (e) {
-      setState(() {
-        _error = e.message;
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = 'Không thể tải danh sách. Kiểm tra kết nối mạng.';
-        _isLoading = false;
-      });
+      setState(() { _error = e.message; _isLoading = false; });
+    } catch (_) {
+      setState(() { _error = 'Không thể tải danh sách. Kiểm tra kết nối mạng.'; _isLoading = false; });
     }
   }
 
@@ -59,17 +56,16 @@ class _HomeScreenState extends State<HomeScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Đăng xuất'),
-        content: const Text('Bạn có chắc muốn đăng xuất?'),
+        content: const Text('Bạn có chắc muốn đăng xuất không?'),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
+          TextButton(onPressed: () => Navigator.pop(context, false),
               child: const Text('Hủy')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-              child: const Text('Đăng xuất')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Đăng xuất',
+                style: TextStyle(color: AppTheme.danger)),
+          ),
         ],
       ),
     );
@@ -82,158 +78,81 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // User model mới: có email, fullName, phone — không có username
     final user = context.watch<AuthProvider>().user;
-
-    // Lấy chữ cái đầu hiển thị avatar: ưu tiên fullName, fallback email
-    final displayInitial = (user?.fullName?.isNotEmpty == true
-            ? user!.fullName!
-            : user?.email ?? 'U')[0]
-        .toUpperCase();
+    final initial = (user?.fullName?.isNotEmpty == true
+        ? user!.fullName! : user?.email ?? 'U')[0].toUpperCase();
 
     return Scaffold(
+      backgroundColor: AppTheme.surface,
       appBar: AppBar(
-        title: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8)),
-              child: const Icon(Icons.smart_toy_rounded,
-                  color: AppTheme.primary, size: 20),
-            ),
-            const SizedBox(width: 10),
-            const Text('Alpha Mini'),
-          ],
-        ),
-        // Thay phần actions trong AppBar của home_screen.dart
-// Tìm đoạn actions: [...] và thay bằng đoạn dưới
-
+        title: const Text('Alpha Mini Family'),
         actions: [
-          // Gộp camera + voice + payment vào 1 PopupMenu
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.apps_rounded),
-            tooltip: 'Tính năng',
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-            onSelected: (v) {
-              switch (v) {
-                case 'camera':
-                  Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => const CameraScreen()));
-                  break;
-                case 'voice':
-                  Navigator.push(context,
-                      MaterialPageRoute(
-                          builder: (_) => const VoiceMessageScreen()));
-                  break;
-                case 'payment':
-                  Navigator.push(context,
-                      MaterialPageRoute(builder: (_) => const PaymentScreen()));
-                  break;
-              }
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(
-                value: 'camera',
-                child: Row(children: [
-                  Icon(Icons.videocam_rounded, color: AppTheme.robotBlue),
-                  SizedBox(width: 12),
-                  Text('Camera Robot'),
-                ]),
-              ),
-              const PopupMenuItem(
-                value: 'voice',
-                child: Row(children: [
-                  Icon(Icons.record_voice_over_rounded,
-                      color: AppTheme.primary),
-                  SizedBox(width: 12),
-                  Text('Nhắn tin cho Robot'),
-                ]),
-              ),
-              const PopupMenuItem(
-                value: 'payment',
-                child: Row(children: [
-                  Icon(Icons.workspace_premium_rounded,
-                      color: AppTheme.success),
-                  SizedBox(width: 12),
-                  Text('Gói dịch vụ'),
-                ]),
-              ),
-            ],
+          IconButton(
+            icon: const Icon(Icons.videocam_outlined),
+            tooltip: 'Camera Robot',
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const CameraScreen())),
           ),
           IconButton(
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: _loadProfiles,
-            tooltip: 'Làm mới',
+            icon: const Icon(Icons.workspace_premium_outlined),
+            tooltip: 'Gói dịch vụ',
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const PaymentScreen())),
           ),
           PopupMenuButton<String>(
+            tooltip: 'Tài khoản',
+            offset: const Offset(0, 48),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             icon: CircleAvatar(
-              radius: 16,
-              backgroundColor: AppTheme.primary.withOpacity(0.1),
-              child: Text(
-                displayInitial,
-                style: const TextStyle(
-                    color: AppTheme.primary, fontWeight: FontWeight.w700),
-              ),
+              radius: 17,
+              backgroundColor: AppTheme.primary.withValues(alpha: 0.12),
+              child: Text(initial, style: const TextStyle(
+                  color: AppTheme.primary, fontWeight: FontWeight.w700,
+                  fontSize: 14)),
             ),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
             onSelected: (v) {
-              if (v == 'logout') _logout();
+              if (v == 'logout') { _logout(); }
+              if (v == 'voice') {
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => const VoiceMessageScreen()));
+              }
             },
             itemBuilder: (_) => [
               PopupMenuItem(
                 enabled: false,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (user?.fullName != null)
-                      Text(user!.fullName!,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w700)),
-                    Text(user?.email ?? '',
-                        style: const TextStyle(
-                            fontSize: 12,
-                            color: AppTheme.textSecondary)),
-                    if (user?.phone != null)
-                      Text(user!.phone!,
-                          style: const TextStyle(
-                              fontSize: 12,
-                              color: AppTheme.textSecondary)),
-                    const SizedBox(height: 4),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: AppTheme.success.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(user?.role ?? 'FAMILYMEMBER',
-                          style: const TextStyle(
-                              fontSize: 10,
-                              color: AppTheme.success,
-                              fontWeight: FontWeight.w700)),
-                    ),
-                  ],
-                ),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  if (user?.fullName != null)
+                    Text(user!.fullName!, style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 15,
+                        color: AppTheme.textPrimary)),
+                  Text(user?.email ?? '',
+                      style: const TextStyle(fontSize: 13,
+                          color: AppTheme.textSecondary)),
+                ]),
               ),
               const PopupMenuDivider(),
               const PopupMenuItem(
+                value: 'voice',
+                child: Row(children: [
+                  Icon(Icons.record_voice_over_rounded,
+                      size: 18, color: AppTheme.textPrimary),
+                  SizedBox(width: 12),
+                  Text('Gửi tin nhắn Robot'),
+                ]),
+              ),
+              const PopupMenuItem(
                 value: 'logout',
                 child: Row(children: [
-                  Icon(Icons.logout_rounded,
-                      color: AppTheme.danger, size: 18),
-                  SizedBox(width: 10),
+                  Icon(Icons.logout_rounded, size: 18, color: AppTheme.danger),
+                  SizedBox(width: 12),
                   Text('Đăng xuất',
                       style: TextStyle(color: AppTheme.danger)),
                 ]),
               ),
             ],
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 4),
         ],
       ),
       body: RefreshIndicator(
@@ -254,74 +173,54 @@ class _HomeScreenState extends State<HomeScreen> {
         },
         icon: const Icon(Icons.person_add_rounded),
         label: const Text('Thêm người nhà'),
-        backgroundColor: AppTheme.primary,
-        foregroundColor: Colors.white,
+        elevation: 2,
       ),
     );
   }
 
-  Widget _buildList() {
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-      itemCount: _profiles.length,
-      itemBuilder: (_, i) => _ElderlyCard(
-        profile: _profiles[i],
-        onTap: () async {
-          await Navigator.push(
-              context,
-              MaterialPageRoute(
-                  builder: (_) => ElderlyDetailScreen(profile: _profiles[i])));
-          _loadProfiles();
-        },
-      ),
-    );
-  }
+  Widget _buildList() => ListView.builder(
+    padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+    itemCount: _profiles.length,
+    itemBuilder: (_, i) => _ElderlyCard(
+      profile: _profiles[i],
+      onTap: () async {
+        await Navigator.push(context, MaterialPageRoute(
+            builder: (_) => ElderlyDetailScreen(profile: _profiles[i])));
+        _loadProfiles();
+      },
+    ),
+  );
 
-  Widget _buildEmpty() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.people_outline_rounded,
-              size: 72, color: AppTheme.textSecondary.withOpacity(0.4)),
-          const SizedBox(height: 16),
-          const Text('Chưa có người nhà nào',
-              style: TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.textSecondary)),
-          const SizedBox(height: 8),
-          const Text('Nhấn + để thêm người nhà đầu tiên',
-              style: TextStyle(color: AppTheme.textSecondary)),
-        ],
-      ),
-    );
-  }
+  Widget _buildEmpty() => Center(child: Column(
+    mainAxisAlignment: MainAxisAlignment.center,
+    children: [
+      Icon(Icons.people_outline_rounded,
+          size: 72, color: Colors.grey.shade300),
+      const SizedBox(height: 20),
+      const Text('Chưa có người nhà nào',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700,
+              color: AppTheme.textPrimary)),
+      const SizedBox(height: 8),
+      const Text('Nhấn nút bên dưới để thêm người nhà',
+          style: TextStyle(fontSize: 15, color: AppTheme.textSecondary)),
+    ],
+  ));
 
-  Widget _buildError() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(Icons.error_outline_rounded,
-                size: 56, color: AppTheme.danger),
-            const SizedBox(height: 16),
-            Text(_error!,
-                textAlign: TextAlign.center,
-                style: const TextStyle(color: AppTheme.textSecondary)),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: _loadProfiles,
-              icon: const Icon(Icons.refresh),
-              label: const Text('Thử lại'),
-            ),
-          ],
-        ),
+  Widget _buildError() => Center(child: Padding(
+    padding: const EdgeInsets.all(32),
+    child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+      const Icon(Icons.wifi_off_rounded, size: 56, color: AppTheme.textSecondary),
+      const SizedBox(height: 16),
+      Text(_error!, textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 15, color: AppTheme.textSecondary)),
+      const SizedBox(height: 20),
+      ElevatedButton.icon(
+        onPressed: _loadProfiles,
+        icon: const Icon(Icons.refresh_rounded),
+        label: const Text('Thử lại'),
       ),
-    );
-  }
+    ]),
+  ));
 }
 
 // ── Elderly Card ──────────────────────────────────────────────────────────────
@@ -329,10 +228,8 @@ class _HomeScreenState extends State<HomeScreen> {
 class _ElderlyCard extends StatelessWidget {
   final ElderlyProfile profile;
   final VoidCallback onTap;
-
   const _ElderlyCard({required this.profile, required this.onTap});
 
-  /// Tính tuổi từ dateOfBirth "YYYY-MM-DD"
   int? get _age {
     if (profile.dateOfBirth == null) return null;
     try {
@@ -340,118 +237,93 @@ class _ElderlyCard extends StatelessWidget {
       final now = DateTime.now();
       int age = now.year - birth.year;
       if (now.month < birth.month ||
-          (now.month == birth.month && now.day < birth.day)) {
-        age--;
-      }
+          (now.month == birth.month && now.day < birth.day)) age--;
       return age;
-    } catch (_) {
-      return null;
-    }
+    } catch (_) { return null; }
+  }
+
+  // Màu avatar theo chữ cái — không dùng gradient
+  Color get _avatarColor {
+    const colors = [
+      Color(0xFF0D9488), Color(0xFF0891B2), Color(0xFF22C55E),
+      Color(0xFFF97316), Color(0xFFEF4444), Color(0xFF8B5CF6),
+    ];
+    final idx = profile.name.isNotEmpty
+        ? profile.name.codeUnitAt(0) % colors.length : 0;
+    return colors[idx];
   }
 
   @override
   Widget build(BuildContext context) {
     final age = _age;
+    final color = _avatarColor;
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFCCFBF1)),
+      ),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(14),
         child: Padding(
           padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              // Avatar — dùng chữ cái đầu của profile.name
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [AppTheme.elderlyPurple, AppTheme.primary],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Center(
-                  child: Text(
-                    profile.name.isNotEmpty
-                        ? profile.name[0].toUpperCase()
-                        : '?',
-                    style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white),
-                  ),
+          child: Row(children: [
+            // Avatar
+            Container(
+              width: 52, height: 52,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Center(
+                child: Text(
+                  profile.name.isNotEmpty ? profile.name[0].toUpperCase() : '?',
+                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                      color: color),
                 ),
               ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // profile.name thay vì profile.fullName
-                    Text(profile.name,
-                        style: const TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            color: AppTheme.textPrimary)),
-                    const SizedBox(height: 4),
-                    // Tuổi tính từ dateOfBirth
-                    if (age != null)
-                      Row(
-                        children: [
-                          const Icon(Icons.cake_outlined,
-                              size: 13, color: AppTheme.textSecondary),
-                          const SizedBox(width: 4),
-                          Text('$age tuổi',
-                              style: const TextStyle(
-                                  fontSize: 13, color: AppTheme.textSecondary)),
-                        ],
-                      ),
-                    // healthNotes thay cho relationship
-                    if (profile.healthNotes != null &&
-                        profile.healthNotes!.isNotEmpty) ...[
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          const Icon(Icons.medical_information_outlined,
-                              size: 13, color: AppTheme.textSecondary),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              profile.healthNotes!,
-                              style: const TextStyle(
-                                  fontSize: 12, color: AppTheme.textSecondary),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    // roomId nếu có
-                    if (profile.roomId != null) ...[
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          const Icon(Icons.meeting_room_outlined,
-                              size: 13, color: AppTheme.textSecondary),
-                          const SizedBox(width: 4),
-                          Text('Phòng ${profile.roomId}',
-                              style: const TextStyle(
-                                  fontSize: 12, color: AppTheme.textSecondary)),
-                        ],
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              const Icon(Icons.chevron_right_rounded,
-                  color: AppTheme.textSecondary),
-            ],
-          ),
+            ),
+            const SizedBox(width: 14),
+            // Info
+            Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(profile.name,
+                  style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700,
+                      color: AppTheme.textPrimary)),
+              const SizedBox(height: 5),
+              Row(children: [
+                if (age != null) ...[
+                  const Icon(Icons.calendar_today_outlined,
+                      size: 13, color: AppTheme.textSecondary),
+                  const SizedBox(width: 4),
+                  Text('$age tuổi',
+                      style: const TextStyle(fontSize: 13,
+                          color: AppTheme.textSecondary)),
+                  const SizedBox(width: 12),
+                ],
+                if (profile.roomId != null) ...[
+                  const Icon(Icons.door_back_door_outlined,
+                      size: 13, color: AppTheme.textSecondary),
+                  const SizedBox(width: 4),
+                  Text('Phòng ${profile.roomId}',
+                      style: const TextStyle(fontSize: 13,
+                          color: AppTheme.textSecondary)),
+                ],
+              ]),
+              if (profile.healthNotes?.isNotEmpty == true) ...[
+                const SizedBox(height: 4),
+                Text(profile.healthNotes!,
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 13,
+                        color: AppTheme.textSecondary)),
+              ],
+            ])),
+            const Icon(Icons.chevron_right_rounded,
+                color: AppTheme.textSecondary, size: 22),
+          ]),
         ),
       ),
     );

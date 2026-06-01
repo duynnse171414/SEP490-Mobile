@@ -303,6 +303,23 @@ class ApiService {
   }
 
   // ─── REMINDER LOG ──────────────────────────────────────────────────────────
+  static Future<int?> createReminderLog(int reminderId, int elderlyId) async {
+    final res = await http.post(
+      Uri.parse('${AppConstants.baseUrl}/api/reminder-logs'),
+      headers: _headers,
+      body: json.encode({
+        'reminderId': reminderId,
+        'elderlyId': elderlyId,
+        'triggeredTime': DateTime.now().toUtc().toIso8601String(),
+      }),
+    ).timeout(const Duration(seconds: 15));
+    if (res.statusCode == 200 || res.statusCode == 201) {
+      final data = json.decode(res.body);
+      return data['id'] as int?;
+    }
+    return null;
+  }
+
   static Future<List<ReminderLog>> getReminderLogsByElderly(int elderlyId) async {
     final res = await http.get(
       Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.reminderLogsByElderly(elderlyId)}'),
@@ -382,6 +399,28 @@ class ApiService {
     return list.map((e) => AlertNotification.fromJson(e as Map<String, dynamic>)).toList();
   }
 
+  static Future<void> createAlert({
+    required int elderlyId,
+    required String elderlyName,
+    required String message,
+    int? reminderLogId,
+  }) async {
+    try {
+      await http.post(
+        Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.alerts}'),
+        headers: _headers,
+        body: json.encode({
+          'elderlyId': elderlyId,
+          'elderlyName': elderlyName,
+          'alertType': 'MEDICATION_MISSED',
+          'message': message,
+          'resolved': false,
+          if (reminderLogId != null) 'reminderLogId': reminderLogId,
+        }),
+      ).timeout(const Duration(seconds: 15));
+    } catch (_) {}
+  }
+
   static Future<void> resolveAlert(AlertNotification alert) async {
     final res = await http.put(
       Uri.parse('${AppConstants.baseUrl}/api/alerts/${alert.id}'),
@@ -423,7 +462,7 @@ class ApiService {
       headers: _headers,
     ).timeout(const Duration(seconds: 30));
     if (res.statusCode < 200 || res.statusCode >= 300) {
-      throw ApiException('Không thể xóa', statusCode: res.statusCode);
+      throw ApiException(_extractErrorMsg(res), statusCode: res.statusCode);
     }
   }
 

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/reminder_checker_service.dart';
 import '../utils/theme.dart';
 
 class RemindersScreen extends StatefulWidget {
@@ -90,11 +91,48 @@ class _RemindersScreenState extends State<RemindersScreen>
     }
   }
 
+  /// Tạo log cho các reminder đã qua giờ mà chưa có log (không cần main.py)
+  Future<void> _catchupMissedLogs(List<ReminderLog> existingLogs) async {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    // ID các reminder đã có log hôm nay
+    final loggedIds = existingLogs
+        .where((l) {
+          final t = l.triggeredDateTime;
+          return t != null && t.isAfter(today);
+        })
+        .map((l) => l.reminderId)
+        .toSet();
+
+    for (final r in _reminders) {
+      if (!r.active) continue;
+      if (loggedIds.contains(r.id)) continue;
+
+      // Tính giờ nhắc hôm nay
+      final dt = r.scheduleDateTime;
+      if (dt == null) continue;
+
+      DateTime todayTime = DateTime(now.year, now.month, now.day, dt.hour, dt.minute);
+
+      // Chỉ tạo log nếu đã qua giờ hơn 2 phút
+      if (todayTime.isAfter(now.subtract(const Duration(minutes: 2)))) continue;
+
+      try {
+        await ApiService.createReminderLog(r.id, widget.elderlyProfile.id);
+      } catch (_) {}
+    }
+  }
+
   Future<void> _loadLogs() async {
     setState(() { _loadingLogs = true; _errorLogs = null; });
     try {
       final list = await ApiService.getReminderLogsByElderly(widget.elderlyProfile.id);
-      setState(() { _logs = list; _loadingLogs = false; });
+      // Tạo log cho reminder bị bỏ lỡ (không cần main.py)
+      await _catchupMissedLogs(list);
+      // Load lại sau catch-up để hiển thị log mới tạo
+      final updated = await ApiService.getReminderLogsByElderly(widget.elderlyProfile.id);
+      setState(() { _logs = updated; _loadingLogs = false; });
     } on ApiException catch (e) {
       setState(() { _errorLogs = e.message; _loadingLogs = false; });
     } catch (_) {
@@ -286,6 +324,8 @@ class _RemindersScreenState extends State<RemindersScreen>
   Future<void> _confirmLog(ReminderLog log) async {
     try {
       await ApiService.confirmReminderLog(log.id);
+      // Hủy alert timer nếu có
+      ReminderCheckerService.instance.markConfirmed(log.id);
       _loadLogs();
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Đã xác nhận!'), backgroundColor: AppTheme.success));
@@ -394,7 +434,7 @@ class _RemindersScreenState extends State<RemindersScreen>
               ..._availableTypes.map((type) => Padding(
                 padding: const EdgeInsets.only(left: 8),
                 child: FilterChip(
-                  label: Text(type),
+                  label: Text(reminderTypeLabel(type)),
                   selected: _selectedTypeFilter == type,
                   onSelected: (_) => setState(() =>
                       _selectedTypeFilter = _selectedTypeFilter == type ? null : type),
@@ -519,6 +559,15 @@ class _RemindersScreenState extends State<RemindersScreen>
 
 // ── Reminder Card ──────────────────────────────────────────────────────────────
 
+String _toRepeatLabel(String? pattern) {
+  switch ((pattern ?? '').toUpperCase()) {
+    case 'DAILY':   return 'Mỗi ngày';
+    case 'WEEKLY':  return 'Mỗi tuần';
+    case 'MONTHLY': return 'Mỗi tháng';
+    default:        return pattern ?? '';
+  }
+}
+
 class _ReminderCard extends StatelessWidget {
   final Reminder reminder;
   final VoidCallback onDelete;
@@ -527,77 +576,102 @@ class _ReminderCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dt = reminder.scheduleDateTime;
-    final timeStr = dt != null ? DateFormat('HH:mm - dd/MM/yyyy').format(dt) : reminder.scheduleTime;
+    final timeStr = dt != null ? DateFormat('HH:mm').format(dt) : '--:--';
+    final dateStr = dt != null ? DateFormat('dd/MM/yyyy').format(dt) : '';
     final active = reminder.active;
+    final typeColor = reminderTypeColor(reminder.reminderType);
+    final typeIcon = reminderTypeIcon(reminder.reminderType);
+    final typeLabel = reminderTypeLabel(reminder.reminderType);
 
-    return Card(
+    return Container(
       margin: const EdgeInsets.only(bottom: 10),
-      shape: RoundedRectangleBorder(
+      decoration: BoxDecoration(
+        color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        side: BorderSide(
-          color: active ? AppTheme.success.withOpacity(0.3) : AppTheme.warning.withOpacity(0.4),
-          width: 1.5,
-        ),
+        border: Border.all(color: const Color(0xFFCCFBF1)),
+        boxShadow: [BoxShadow(
+          color: Colors.black.withValues(alpha: 0.04),
+          blurRadius: 6, offset: const Offset(0, 2),
+        )],
       ),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         child: Row(children: [
+          // Type icon
           Container(
-            padding: const EdgeInsets.all(10),
+            width: 48, height: 48,
             decoration: BoxDecoration(
-              color: active ? AppTheme.success.withOpacity(0.1) : AppTheme.warning.withOpacity(0.1),
+              color: typeColor.withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(active ? Icons.alarm_on_rounded : Icons.alarm_off_rounded,
-                color: active ? AppTheme.success : AppTheme.warning),
+            child: Icon(typeIcon, color: typeColor, size: 24),
           ),
           const SizedBox(width: 14),
+          // Content
           Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text(reminder.title,
-                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-            if (reminder.reminderType != null) ...[
-              const SizedBox(height: 2),
-              Row(children: [
-                const Icon(Icons.label_outline, size: 12, color: AppTheme.textSecondary),
-                const SizedBox(width: 4),
-                Text(reminder.reminderType!,
-                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-              ]),
-            ],
-            const SizedBox(height: 4),
+                style: const TextStyle(fontWeight: FontWeight.w700,
+                    fontSize: 16, color: AppTheme.textPrimary)),
+            const SizedBox(height: 6),
             Row(children: [
-              const Icon(Icons.access_time_rounded, size: 13, color: AppTheme.textSecondary),
-              const SizedBox(width: 4),
-              Text(timeStr, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: typeColor.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(typeLabel,
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                        color: typeColor)),
+              ),
+              const SizedBox(width: 8),
+              const Icon(Icons.schedule_rounded, size: 14, color: AppTheme.textSecondary),
+              const SizedBox(width: 3),
+              Text(timeStr,
+                  style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
+                      color: AppTheme.textPrimary)),
+              if (dateStr.isNotEmpty) ...[
+                const SizedBox(width: 4),
+                Text('· $dateStr',
+                    style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ],
             ]),
             if (reminder.repeatPattern != null) ...[
-              const SizedBox(height: 2),
+              const SizedBox(height: 4),
               Row(children: [
-                const Icon(Icons.repeat_rounded, size: 12, color: AppTheme.textSecondary),
+                const Icon(Icons.repeat_rounded, size: 13, color: AppTheme.textSecondary),
                 const SizedBox(width: 4),
-                Text(reminder.repeatPattern!,
+                Text(_toRepeatLabel(reminder.repeatPattern),
                     style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
               ]),
             ],
           ])),
-          Column(children: [
+          // Right side
+          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: active ? AppTheme.success.withOpacity(0.1) : AppTheme.warning.withOpacity(0.1),
+                color: active
+                    ? AppTheme.success.withValues(alpha: 0.1)
+                    : Colors.grey.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Text(active ? 'Active' : 'Inactive',
-                  style: TextStyle(
-                      fontSize: 10, fontWeight: FontWeight.w700,
-                      color: active ? AppTheme.success : AppTheme.warning)),
+              child: Text(active ? 'Bật' : 'Tắt',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+                      color: active ? AppTheme.success : AppTheme.textSecondary)),
             ),
-            const SizedBox(height: 8),
-            IconButton(
-              icon: const Icon(Icons.delete_outline_rounded, color: AppTheme.danger, size: 20),
-              onPressed: onDelete,
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: onDelete,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: AppTheme.danger.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.delete_outline_rounded,
+                    color: AppTheme.danger, size: 18),
+              ),
             ),
           ]),
         ]),
@@ -819,7 +893,7 @@ class _AddReminderSheetState extends State<_AddReminderSheet> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
               decoration: BoxDecoration(
-                color: const Color(0xFFF3F4F6),
+                color: const Color(0xFFECFDF5),
                 borderRadius: BorderRadius.circular(12),
                 border: _scheduleDateTime != null
                     ? Border.all(color: AppTheme.primary, width: 2) : null,

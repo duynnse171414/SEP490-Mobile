@@ -72,10 +72,53 @@ class _ElderlyDetailScreenState extends State<ElderlyDetailScreen>
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [AppTheme.elderlyPurple, AppTheme.primary],
+                colors: [AppTheme.primaryDark, AppTheme.primary],
               ),
             ),
-            child: SafeArea(
+            child: Stack(
+              children: [
+                // Decorative background circles
+                Positioned(
+                  top: -40, right: -30,
+                  child: Container(
+                    width: 160, height: 160,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.06),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 20, right: 60,
+                  child: Container(
+                    width: 80, height: 80,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.05),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  bottom: 40, left: -20,
+                  child: Container(
+                    width: 120, height: 120,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.05),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 60, left: 30,
+                  child: Container(
+                    width: 50, height: 50,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Colors.white.withValues(alpha: 0.06),
+                    ),
+                  ),
+                ),
+                SafeArea(
               bottom: false,
               child: Column(children: [
                 // AppBar row
@@ -141,7 +184,7 @@ class _ElderlyDetailScreenState extends State<ElderlyDetailScreen>
                     width: 72,
                     height: 72,
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
+                      color: Colors.white.withValues(alpha: 0.2),
                       shape: BoxShape.circle,
                       border: Border.all(color: Colors.white, width: 2.5),
                     ),
@@ -250,8 +293,10 @@ class _ElderlyDetailScreenState extends State<ElderlyDetailScreen>
                   ],
                 ),
               ]),
-            ),
-          ),
+                ),  // SafeArea
+              ],
+            ),  // Stack
+          ),  // Container
 
           // ── Tab content ───────────────────────────────────────────────────
           Expanded(
@@ -281,7 +326,7 @@ class _InfoChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.2),
+        color: Colors.white.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
