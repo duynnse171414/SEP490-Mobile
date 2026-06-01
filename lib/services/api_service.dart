@@ -151,10 +151,30 @@ class ApiService {
     final data = await _handleResponse(res);
     final user = User.fromJson(data);
     _currentAccountId = user.id;
-    // Gửi token lên robot (không chặn luồng chính)
+    // Gửi session lên backend (HTTPS→HTTPS, hoạt động từ mọi nơi kể cả Netlify)
+    _pushInitSession(user);
+    // Thử push trực tiếp tới robot qua HTTP (chỉ hoạt động khi cùng mạng, native app)
     pushTokenToRobot(user);
     return user;
   }
+
+  /// Gửi INIT_SESSION lên backend để Python robot tự nhận token.
+  /// Hoạt động từ mọi nơi (HTTPS→HTTPS) — không bị mixed content.
+  static Future<void> _pushInitSession(User user) async {
+    try {
+      final action = '$_initSessionPrefix${user.token}:${user.id}:${user.email}';
+      await http.post(
+        Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.robotAction}'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${user.token}',
+        },
+        body: json.encode({'action': action, 'executed': false}),
+      ).timeout(const Duration(seconds: 10));
+    } catch (_) {}
+  }
+
+  static const String _initSessionPrefix = 'INIT_SESSION:';
 
   static Future<void> logout() async {
     try {
