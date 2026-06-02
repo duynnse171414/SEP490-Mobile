@@ -489,11 +489,15 @@ class ApiService {
   // ─── ROBOT ACTION ──────────────────────────────────────────────────────────
   /// Gửi lệnh thực hiện động tác đến robot
   /// POST /api/robot-action với { action: code, executed: false }
-  static Future<RobotAction> sendRobotAction(String actionCode) async {
+  static Future<RobotAction> sendRobotAction(String actionCode, {int? elderlyId}) async {
     final res = await http.post(
       Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.robotAction}'),
       headers: _headers,
-      body: json.encode({'action': actionCode, 'executed': false}),
+      body: json.encode({
+        'action': actionCode,
+        'executed': false,
+        if (elderlyId != null) 'elderlyId': elderlyId,
+      }),
     ).timeout(const Duration(seconds: 30));
     final data = await _handleResponse(res);
     return RobotAction.fromJson(data);

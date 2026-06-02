@@ -9,7 +9,6 @@ import '../services/auth_provider.dart';
 import '../services/reminder_checker_service.dart';
 import '../utils/theme.dart';
 import 'login_screen.dart';
-import 'camera_screen.dart';
 import 'voice_message_screen.dart';
 import 'elderly_detail_screen.dart';
 import 'add_elderly_screen.dart';
@@ -92,10 +91,10 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Alpha Mini Family'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.videocam_outlined),
-            tooltip: 'Camera Robot',
+            icon: const Icon(Icons.chat_outlined),
+            tooltip: 'Nhắn tin Robot',
             onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const CameraScreen())),
+                MaterialPageRoute(builder: (_) => const VoiceMessageScreen())),
           ),
           IconButton(
             icon: const Icon(Icons.workspace_premium_outlined),
@@ -116,10 +115,6 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
             onSelected: (v) {
               if (v == 'logout') { _logout(); }
-              if (v == 'voice') {
-                Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const VoiceMessageScreen()));
-              }
             },
             itemBuilder: (_) => [
               PopupMenuItem(
@@ -136,15 +131,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ]),
               ),
               const PopupMenuDivider(),
-              const PopupMenuItem(
-                value: 'voice',
-                child: Row(children: [
-                  Icon(Icons.record_voice_over_rounded,
-                      size: 18, color: AppTheme.textPrimary),
-                  SizedBox(width: 12),
-                  Text('Gửi tin nhắn Robot'),
-                ]),
-              ),
               const PopupMenuItem(
                 value: 'logout',
                 child: Row(children: [
@@ -390,23 +376,9 @@ class _RobotWebBannerState extends State<_RobotWebBanner> {
             style: TextStyle(fontSize: 12, color: Color(0xFF6D4C41), height: 1.4),
           ),
           const SizedBox(height: 6),
-          GestureDetector(
-            onTap: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const CameraScreen())),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-              decoration: BoxDecoration(
-                color: Colors.orange.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(loginUrl,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFFE65100),
-                      fontWeight: FontWeight.w700, fontFamily: 'monospace')),
-            ),
-          ),
-          const SizedBox(height: 4),
-          const Text('Nhấn vào Camera (⚙️) để nhập IP laptop trước',
-              style: TextStyle(fontSize: 11, color: Color(0xFF6D4C41))),
+          SelectableText(loginUrl,
+              style: const TextStyle(fontSize: 12, color: Color(0xFFE65100),
+                  fontWeight: FontWeight.w700, fontFamily: 'monospace')),
         ])),
         GestureDetector(
           onTap: () => setState(() => _dismissed = true),

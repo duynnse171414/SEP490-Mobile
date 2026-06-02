@@ -4,11 +4,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
+import '../models/models.dart';
 import '../services/api_service.dart';
 import '../utils/theme.dart';
 
 class VoiceMessageScreen extends StatefulWidget {
-  const VoiceMessageScreen({super.key});
+  final ElderlyProfile? elderly;
+  const VoiceMessageScreen({super.key, this.elderly});
 
   @override
   State<VoiceMessageScreen> createState() => _VoiceMessageScreenState();
@@ -111,8 +113,10 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
   Future<void> _sendText(String text) async {
     if (text.trim().isEmpty) return;
     setState(() => _isSending = true);
+    final elderly = widget.elderly;
     try {
-      await ApiService.sendRobotAction('TTS:${text.trim()}');
+      await ApiService.sendRobotAction('TTS:${text.trim()}',
+          elderlyId: elderly?.id);
       setState(() {
         _history.insert(0, _SentMessage(text: text.trim(), time: DateTime.now()));
         _textCtrl.clear();
@@ -154,7 +158,9 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
             child: const Icon(Icons.record_voice_over_rounded,
                 color: AppTheme.primary, size: 20)),
           const SizedBox(width: 10),
-          const Text('Nhắn tin cho Robot'),
+          Text(widget.elderly != null
+              ? 'Nhắn tin cho ${widget.elderly!.name}'
+              : 'Nhắn tin cho Robot'),
         ]),
       ),
       body: Column(children: [
@@ -170,14 +176,17 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
             ),
             borderRadius: BorderRadius.circular(14),
           ),
-          child: const Row(children: [
-            Icon(Icons.smart_toy_rounded, color: Colors.white, size: 32),
-            SizedBox(width: 12),
+          child: Row(children: [
+            const Icon(Icons.smart_toy_rounded, color: Colors.white, size: 32),
+            const SizedBox(width: 12),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Gửi lời nhắn đến Robot',
-                  style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
-              SizedBox(height: 2),
-              Text('Gõ hoặc nhấn 🎤 nói — robot sẽ đọc to cho người thân',
+              Text(
+                widget.elderly != null
+                    ? 'Gửi lời nhắn đến ${widget.elderly!.name}'
+                    : 'Gửi lời nhắn đến Robot',
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 15)),
+              const SizedBox(height: 2),
+              const Text('Gõ hoặc nhấn 🎤 nói — robot sẽ đọc to cho người thân',
                   style: TextStyle(color: Colors.white70, fontSize: 12)),
             ])),
           ]),

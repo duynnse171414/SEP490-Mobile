@@ -7,7 +7,7 @@ import '../utils/theme.dart';
 import 'reminders_screen.dart';
 import 'exercises_screen.dart';
 import 'alert_screen.dart';
-import 'camera_screen.dart';
+import 'voice_message_screen.dart';
 import 'interaction_log_screen.dart';
 
 class ElderlyDetailScreen extends StatefulWidget {
@@ -163,15 +163,15 @@ class _ElderlyDetailScreenState extends State<ElderlyDetailScreen>
                         ),
                     ]),
                     const SizedBox(width: 4),
-                    // Camera button
+                    // Nhắn tin Robot
                     IconButton(
-                      icon: const Icon(Icons.videocam_rounded,
+                      icon: const Icon(Icons.chat_rounded,
                           color: Colors.white),
                       onPressed: () => Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (_) => const CameraScreen())),
-                      tooltip: 'Camera Robot',
+                              builder: (_) => VoiceMessageScreen(elderly: widget.profile))),
+                      tooltip: 'Nhắn tin Robot',
                     ),
                   ]),
                 ),
