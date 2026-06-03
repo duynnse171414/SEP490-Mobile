@@ -18,7 +18,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final _phoneCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
   final _confirmPasswordCtrl = TextEditingController();
-  String _gender = 'MALE';
+  String _gender = 'Male';
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
 
@@ -163,14 +163,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 ),
                                 items: const [
                                   DropdownMenuItem(
-                                      value: 'MALE', child: Text('Nam')),
+                                      value: 'Male', child: Text('Nam')),
                                   DropdownMenuItem(
-                                      value: 'FEMALE', child: Text('Nữ')),
-                                  DropdownMenuItem(
-                                      value: 'OTHER', child: Text('Khác')),
+                                      value: 'Female', child: Text('Nữ')),
                                 ],
                                 onChanged: (v) =>
-                                    setState(() => _gender = v ?? 'MALE'),
+                                    setState(() => _gender = v ?? 'Male'),
                               ),
                               const SizedBox(height: 14),
 
