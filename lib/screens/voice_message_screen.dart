@@ -60,14 +60,23 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
 
   Future<void> _initSpeech() async {
     _speechAvailable = await _speech.initialize(
-      onError: (e) => print('Speech error: $e'),
+      onError: (e) {
+        if (mounted) setState(() { _isRecording = false; _interimText = ''; });
+        _pulseCtrl.stop();
+      },
+      onStatus: (status) {
+        if (status == 'done' || status == 'notListening') {
+          if (mounted) setState(() { _isRecording = false; _interimText = ''; });
+          _pulseCtrl.stop();
+        }
+      },
     );
     setState(() {});
   }
 
   Future<void> _startRecording() async {
     if (!_speechAvailable) {
-      _showError('Thiết bị không hỗ trợ ghi âm');
+      _showError('Thiết bị không hỗ trợ ghi âm. Vui lòng cấp quyền microphone.');
       return;
     }
 
@@ -76,6 +85,7 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
 
     await _speech.listen(
       onResult: (result) {
+        if (!mounted) return;
         setState(() {
           _interimText = result.recognizedWords;
           if (result.finalResult) {
@@ -88,20 +98,11 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
       localeId: 'vi_VN',
       listenFor: const Duration(seconds: 30),
       pauseFor: const Duration(seconds: 3),
-      cancelOnError: false,
-      partialResults: true,
-      onSoundLevelChange: null,
+      listenOptions: stt.SpeechListenOptions(
+        cancelOnError: false,
+        partialResults: true,
+      ),
     );
-
-    // Khi speech kết thúc
-    _speech.statusListener = (status) {
-      if (status == 'done' || status == 'notListening') {
-        if (mounted) {
-          setState(() { _isRecording = false; _interimText = ''; });
-          _pulseCtrl.stop();
-        }
-      }
-    };
   }
 
   void _stopRecording() {
@@ -111,29 +112,29 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
   }
 
   Future<void> _sendText(String text) async {
-    if (text.trim().isEmpty) return;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return;
+    if (_isRecording) _stopRecording();
     setState(() => _isSending = true);
     final elderly = widget.elderly;
     try {
-      await ApiService.sendRobotAction('TTS:${text.trim()}',
-          elderlyId: elderly?.id);
+      await ApiService.sendRobotAction('TTS:$trimmed', elderlyId: elderly?.id);
+      if (!mounted) return;
       setState(() {
-        _history.insert(0, _SentMessage(text: text.trim(), time: DateTime.now()));
+        _history.insert(0, _SentMessage(text: trimmed, time: DateTime.now()));
         _textCtrl.clear();
         _interimText = '';
       });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Row(children: [
-            Icon(Icons.smart_toy_rounded, color: Colors.white, size: 18),
-            SizedBox(width: 8),
-            Expanded(child: Text('Robot sẽ đọc tin nhắn của bạn!')),
-          ]),
-          backgroundColor: AppTheme.success,
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        ));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: const Row(children: [
+          Icon(Icons.smart_toy_rounded, color: Colors.white, size: 18),
+          SizedBox(width: 8),
+          Expanded(child: Text('Đã gửi — robot sẽ đọc sau khi xong nhắc nhở')),
+        ]),
+        backgroundColor: AppTheme.success,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ));
     } on ApiException catch (e) {
       _showError(e.message);
     } finally {
@@ -153,7 +154,7 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
       appBar: AppBar(
         title: Row(mainAxisSize: MainAxisSize.min, children: [
           Container(padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(color: AppTheme.primary.withOpacity(0.1),
+            decoration: BoxDecoration(color: AppTheme.primary.withValues(alpha:0.1),
                 borderRadius: BorderRadius.circular(8)),
             child: const Icon(Icons.record_voice_over_rounded,
                 color: AppTheme.primary, size: 20)),
@@ -205,9 +206,9 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: AppTheme.primary.withOpacity(0.08),
+                    color: AppTheme.primary.withValues(alpha:0.08),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+                    border: Border.all(color: AppTheme.primary.withValues(alpha:0.3)),
                   ),
                   child: Text(msg, style: const TextStyle(fontSize: 13,
                       color: AppTheme.primary, fontWeight: FontWeight.w600)),
@@ -225,7 +226,7 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
           child: _history.isEmpty
               ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                   Icon(Icons.chat_bubble_outline_rounded,
-                      size: 56, color: AppTheme.textSecondary.withOpacity(0.3)),
+                      size: 56, color: AppTheme.textSecondary.withValues(alpha:0.3)),
                   const SizedBox(height: 12),
                   const Text('Chưa có tin nhắn nào',
                       style: TextStyle(color: AppTheme.textSecondary, fontWeight: FontWeight.w600)),
@@ -247,9 +248,9 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
             margin: const EdgeInsets.fromLTRB(12, 0, 12, 4),
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
             decoration: BoxDecoration(
-              color: AppTheme.danger.withOpacity(0.08),
+              color: AppTheme.danger.withValues(alpha:0.08),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.danger.withOpacity(0.3)),
+              border: Border.all(color: AppTheme.danger.withValues(alpha:0.3)),
             ),
             child: Row(children: [
               const Icon(Icons.mic_rounded, color: AppTheme.danger, size: 18),
@@ -274,7 +275,7 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
           padding: EdgeInsets.fromLTRB(12, 10, 12,
               MediaQuery.of(context).viewInsets.bottom + 10),
           decoration: BoxDecoration(color: Colors.white,
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06),
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha:0.06),
                 blurRadius: 10, offset: const Offset(0, -3))]),
           child: Row(children: [
             // Mic
@@ -286,7 +287,7 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
                     scale: _isRecording ? _pulseAnim.value : 1.0, child: child),
                 child: Container(width: 46, height: 46,
                   decoration: BoxDecoration(
-                    color: _isRecording ? AppTheme.danger : AppTheme.primary.withOpacity(0.1),
+                    color: _isRecording ? AppTheme.danger : AppTheme.primary.withValues(alpha:0.1),
                     shape: BoxShape.circle,
                   ),
                   child: Icon(_isRecording ? Icons.stop_rounded : Icons.mic_rounded,
@@ -331,7 +332,7 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
                             begin: Alignment.topLeft, end: Alignment.bottomRight,
                           ),
                           shape: BoxShape.circle,
-                          boxShadow: [BoxShadow(color: AppTheme.primary.withOpacity(0.4),
+                          boxShadow: [BoxShadow(color: AppTheme.primary.withValues(alpha:0.4),
                               blurRadius: 8, offset: const Offset(0, 3))],
                         ),
                         child: const Icon(Icons.send_rounded, color: Colors.white, size: 20)),

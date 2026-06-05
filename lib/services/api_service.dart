@@ -33,6 +33,18 @@ class ApiService {
     String msg = 'Lỗi ${res.statusCode}';
     try {
       final b = json.decode(res.body);
+      // Spring Boot field validation: {"errors": ["field: message", ...]}
+      if (b['errors'] is List && (b['errors'] as List).isNotEmpty) {
+        final errors = (b['errors'] as List).cast<String>();
+        msg = errors.map((e) => e.contains(':') ? e.split(':').last.trim() : e).join('\n');
+        return msg;
+      }
+      // Spring Boot fieldErrors: [{"field": "x", "message": "y"}]
+      if (b['fieldErrors'] is List && (b['fieldErrors'] as List).isNotEmpty) {
+        final errs = (b['fieldErrors'] as List).cast<Map<String, dynamic>>();
+        msg = errs.map((e) => e['message'] ?? e['field'] ?? '').where((s) => s.isNotEmpty).join('\n');
+        return msg;
+      }
       msg = b['message'] ?? b['error'] ?? b['detail'] ?? msg;
       if ((msg == 'Bad Request' || msg.startsWith('Lỗi ')) && res.body.isNotEmpty) {
         msg = res.body;
