@@ -9,6 +9,9 @@ import '../utils/theme.dart';
 // ── Per-elderly action storage ─────────────────────────────────────────────────
 class _ElderlyActionStore {
   static String _key(int elderlyId) => 'elderly_actions_$elderlyId';
+  static String _testCountKey(int actionId) => 'action_test_count_$actionId';
+
+  static const int testLimit = 2;
 
   static Future<Set<int>> getActionIds(int elderlyId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -25,6 +28,19 @@ class _ElderlyActionStore {
 
   static Future<int> count(int elderlyId) async =>
       (await getActionIds(elderlyId)).length;
+
+  static Future<int> getTestCount(int actionId) async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_testCountKey(actionId)) ?? 0;
+  }
+
+  static Future<bool> incrementTestCount(int actionId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final current = prefs.getInt(_testCountKey(actionId)) ?? 0;
+    if (current >= testLimit) return false;
+    await prefs.setInt(_testCountKey(actionId), current + 1);
+    return true;
+  }
 }
 
 class ExercisesScreen extends StatefulWidget {
@@ -93,6 +109,21 @@ class _ExercisesScreenState extends State<ExercisesScreen>
       ));
       return;
     }
+
+    final testCount = await _ElderlyActionStore.getTestCount(action.id);
+    if (testCount >= _ElderlyActionStore.testLimit) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'Bạn đã test "${action.name}" ${_ElderlyActionStore.testLimit} lần. Hãy thêm vào danh sách để sử dụng tiếp.'),
+          backgroundColor: AppTheme.warning,
+          duration: const Duration(seconds: 4),
+        ));
+      }
+      return;
+    }
+
+    if (!mounted) return;
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -164,6 +195,7 @@ class _ExercisesScreenState extends State<ExercisesScreen>
     setState(() => _testingIds.add(action.id));
     try {
       await ApiService.sendRobotAction(action.code!);
+      await _ElderlyActionStore.incrementTestCount(action.id);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Row(children: [

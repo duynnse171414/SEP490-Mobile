@@ -44,6 +44,15 @@ class _PaymentScreenState extends State<PaymentScreen>
     super.dispose();
   }
 
+  int _levelOrder(String? level) {
+    switch ((level ?? '').toUpperCase()) {
+      case 'BASIC':    return 1;
+      case 'STANDARD': return 2;
+      case 'PREMIUM':  return 3;
+      default:         return 0;
+    }
+  }
+
   Future<void> _load() async {
     setState(() { _isLoading = true; _error = null; });
     try {
@@ -140,7 +149,8 @@ class _PaymentScreenState extends State<PaymentScreen>
     try {
       final pkgs = await ApiService.getUserPackagesByElderly(elderlyId);
       if (!mounted) return;
-      // Chỉ chặn khi đã có gói PAID còn hạn — PENDING vẫn cho tạo QR mới
+
+      // Tìm gói PAID còn hạn hiện tại
       final paidActive = pkgs.cast<Map<String, dynamic>>().where((p) {
         final s = (p['status'] as String? ?? '').toUpperCase();
         if (s != 'PAID') return false;
@@ -148,29 +158,104 @@ class _PaymentScreenState extends State<PaymentScreen>
         if (exp == null) return true;
         return DateTime.tryParse(exp)?.isAfter(DateTime.now()) ?? false;
       }).toList();
+
       if (paidActive.isNotEmpty) {
-        final expiredAt = paidActive.first['expiredAt'] as String?;
-        final msg = 'Bạn đã có gói dịch vụ đang hoạt động.'
-            '${expiredAt != null ? '\nHết hạn: ${expiredAt.substring(0, 10)}' : ''}';
-        if (mounted) {
-          showDialog(
-            context: context,
-            builder: (_) => AlertDialog(
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Row(children: [
-                Icon(Icons.info_outline_rounded, color: AppTheme.warning),
-                SizedBox(width: 8),
-                Text('Đã có gói dịch vụ'),
-              ]),
-              content: Text(msg),
-              actions: [TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Đóng'),
-              )],
-            ),
-          );
+        final currentUserPkg = paidActive.first;
+        final currentSvcId   = currentUserPkg['servicePackageId'];
+        final currentSvcPkg  = _packages.where((p) => p.id == currentSvcId).firstOrNull;
+        final currentLevel   = _levelOrder(currentSvcPkg?.level);
+        final newLevel       = _levelOrder(pkg.level);
+
+        if (newLevel < currentLevel) {
+          // Hạ cấp — chặn
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (_) => AlertDialog(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                title: const Row(children: [
+                  Icon(Icons.block_rounded, color: AppTheme.danger),
+                  SizedBox(width: 8),
+                  Text('Không thể hạ cấp'),
+                ]),
+                content: Text(
+                  'Bạn đang dùng gói ${currentSvcPkg?.name ?? "hiện tại"} '
+                  '(cấp cao hơn). Không thể chuyển xuống gói ${pkg.name}.',
+                ),
+                actions: [TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
+                )],
+              ),
+            );
+          }
+          return;
         }
-        return;
+
+        if (newLevel == currentLevel) {
+          // Cùng cấp — chặn, thông báo còn hạn
+          final expiredAt = currentUserPkg['expiredAt'] as String?;
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (_) => AlertDialog(
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                title: const Row(children: [
+                  Icon(Icons.info_outline_rounded, color: AppTheme.warning),
+                  SizedBox(width: 8),
+                  Text('Đã có gói dịch vụ'),
+                ]),
+                content: Text(
+                  'Bạn đã đang dùng gói ${pkg.name}.'
+                  '${expiredAt != null ? '\nHết hạn: ${expiredAt.substring(0, 10)}' : ''}',
+                ),
+                actions: [TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
+                )],
+              ),
+            );
+          }
+          return;
+        }
+
+        // Nâng cấp — hiển thị cảnh báo gói cũ sẽ bị thay thế
+        final expiredAt = currentUserPkg['expiredAt'] as String?;
+        final shouldUpgrade = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            title: const Row(children: [
+              Icon(Icons.upgrade_rounded, color: AppTheme.primary),
+              SizedBox(width: 8),
+              Text('Nâng cấp gói dịch vụ'),
+            ]),
+            content: Column(mainAxisSize: MainAxisSize.min, children: [
+              Text(
+                'Gói hiện tại: ${currentSvcPkg?.name ?? "đang dùng"}'
+                '${expiredAt != null ? ' (hết hạn ${expiredAt.substring(0, 10)})' : ''}',
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Gói cũ sẽ bị thay thế ngay khi thanh toán thành công. '
+                'Thời gian còn lại của gói cũ sẽ không được hoàn lại.',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              ),
+            ]),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Hủy'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primary),
+                child: const Text('Tiếp tục nâng cấp'),
+              ),
+            ],
+          ),
+        );
+        if (shouldUpgrade != true || !mounted) return;
       }
     } catch (_) {}
 
