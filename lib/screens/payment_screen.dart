@@ -20,7 +20,15 @@ class _ElderlyPackageInfo {
   final ElderlyProfile profile;
   final Map<String, dynamic>? activePackage;
   final ServicePackage? packageDetail;
-  _ElderlyPackageInfo(this.profile, this.activePackage, [this.packageDetail]);
+  final Map<String, dynamic>? pendingPackage;
+  final ServicePackage? pendingPackageDetail;
+  _ElderlyPackageInfo(
+    this.profile,
+    this.activePackage, [
+    this.packageDetail,
+    this.pendingPackage,
+    this.pendingPackageDetail,
+  ]);
 }
 
 class _PaymentScreenState extends State<PaymentScreen>
@@ -66,7 +74,10 @@ class _PaymentScreenState extends State<PaymentScreen>
       for (final p in profiles) {
         try {
           final pkgs = await ApiService.getUserPackagesByElderly(p.id);
-          final active = pkgs.cast<Map<String, dynamic>>().where((pkg) {
+          final cast = pkgs.cast<Map<String, dynamic>>();
+
+          // Gói PAID còn hạn
+          final active = cast.where((pkg) {
             final s = (pkg['status'] as String? ?? '').toUpperCase();
             final exp = pkg['expiredAt'] as String?;
             if (s != 'PAID') return false;
@@ -77,9 +88,22 @@ class _PaymentScreenState extends State<PaymentScreen>
           ServicePackage? detail;
           if (activePkg != null) {
             final svcId = activePkg['servicePackageId'];
-            detail = packages.where((p) => p.id == svcId).firstOrNull;
+            detail = packages.where((sp) => sp.id == svcId).firstOrNull;
           }
-          elderlyPkgs.add(_ElderlyPackageInfo(p, activePkg, detail));
+
+          // Gói PENDING (chưa thanh toán)
+          final pending = cast.where((pkg) {
+            final s = (pkg['status'] as String? ?? '').toUpperCase();
+            return s == 'PENDING';
+          }).toList();
+          final pendingPkg = pending.isNotEmpty ? pending.first : null;
+          ServicePackage? pendingDetail;
+          if (pendingPkg != null) {
+            final svcId = pendingPkg['servicePackageId'];
+            pendingDetail = packages.where((sp) => sp.id == svcId).firstOrNull;
+          }
+
+          elderlyPkgs.add(_ElderlyPackageInfo(p, activePkg, detail, pendingPkg, pendingDetail));
         } catch (_) {
           elderlyPkgs.add(_ElderlyPackageInfo(p, null));
         }
@@ -435,6 +459,109 @@ class _PaymentScreenState extends State<PaymentScreen>
   int get _activeCount =>
       _elderlyPackages.where((e) => e.activePackage != null).length;
 
+  List<_ElderlyPackageInfo> get _pendingList =>
+      _elderlyPackages.where((e) => e.pendingPackage != null).toList();
+
+  Future<void> _onResumePending(_ElderlyPackageInfo info) async {
+    final pendingDetail = info.pendingPackageDetail;
+    if (pendingDetail == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(children: [
+          Icon(Icons.pending_actions_rounded, color: AppTheme.warning),
+          SizedBox(width: 10),
+          Text('Tiếp tục thanh toán'),
+        ]),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          _InfoRow(label: 'Người nhà', value: info.profile.name),
+          _InfoRow(label: 'Gói', value: pendingDetail.name),
+          _InfoRow(label: 'Giá', value: pendingDetail.formattedPrice,
+              color: AppTheme.success),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppTheme.warning.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Row(children: [
+              Icon(Icons.info_outline_rounded, color: AppTheme.warning, size: 16),
+              SizedBox(width: 8),
+              Expanded(child: Text(
+                'Đơn hàng vẫn còn hiệu lực. Nhấn tiếp tục để mở lại QR thanh toán.',
+                style: TextStyle(fontSize: 13, color: AppTheme.warning),
+              )),
+            ]),
+          ),
+        ]),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Để sau'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context, true),
+            icon: const Icon(Icons.qr_code_rounded),
+            label: const Text('Mở QR'),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.success),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    _showLoading();
+    try {
+      final result = await ApiService.createPayment(pendingDetail.id, info.profile.id);
+      if (!mounted) return;
+      Navigator.pop(context);
+
+      final checkoutUrl = result['checkoutUrl'] as String? ?? '';
+      final qrCode = (result['qrCode'] as String? ?? '').isNotEmpty
+          ? result['qrCode'] as String
+          : checkoutUrl;
+      final amount = (result['amount'] ?? 0).toDouble();
+
+      if (checkoutUrl.isEmpty && qrCode.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Không nhận được thông tin thanh toán'),
+          backgroundColor: AppTheme.danger,
+        ));
+        return;
+      }
+
+      final paid = await _showQRPaymentDialog(
+        pkg: pendingDetail,
+        amount: amount,
+        qrCode: qrCode,
+        checkoutUrl: checkoutUrl,
+        elderlyId: info.profile.id,
+      );
+
+      if (paid == true && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Thanh toán thành công! Gói dịch vụ đã được kích hoạt.'),
+          backgroundColor: AppTheme.success,
+          duration: Duration(seconds: 4),
+        ));
+        _load();
+      }
+    } on ApiException catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(e.message),
+          backgroundColor: AppTheme.danger,
+        ));
+      }
+    } catch (_) {
+      if (mounted) Navigator.pop(context);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -497,14 +624,80 @@ class _PaymentScreenState extends State<PaymentScreen>
       return const Center(child: Text('Chưa có người nhà nào',
           style: TextStyle(color: AppTheme.textSecondary)));
     }
+    final pending = _pendingList;
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
         children: [
+          // Banner pending nổi bật nếu có
+          if (pending.isNotEmpty) ...[
+            _buildPendingBanner(pending),
+            const SizedBox(height: 16),
+          ],
           _buildSummaryBanner(),
           const SizedBox(height: 16),
-          ..._elderlyPackages.map((info) => _ElderlyPackageCard(info: info)),
+          ..._elderlyPackages.map((info) => _ElderlyPackageCard(
+            info: info,
+            onResumePending: info.pendingPackage != null
+                ? () => _onResumePending(info)
+                : null,
+          )),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPendingBanner(List<_ElderlyPackageInfo> pending) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppTheme.warning.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.warning.withValues(alpha: 0.4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            const Icon(Icons.pending_actions_rounded,
+                color: AppTheme.warning, size: 20),
+            const SizedBox(width: 8),
+            Text(
+              '${pending.length} đơn chờ thanh toán',
+              style: const TextStyle(
+                  color: AppTheme.warning,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14),
+            ),
+          ]),
+          const SizedBox(height: 8),
+          ...pending.map((info) => Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: Row(children: [
+              const Icon(Icons.circle, size: 6, color: AppTheme.warning),
+              const SizedBox(width: 8),
+              Expanded(child: Text(
+                '${info.profile.name} — ${info.pendingPackageDetail?.name ?? "Gói dịch vụ"}',
+                style: const TextStyle(fontSize: 13, color: AppTheme.textPrimary),
+              )),
+              GestureDetector(
+                onTap: () => _onResumePending(info),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppTheme.warning,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text('Thanh toán',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ]),
+          )),
         ],
       ),
     );
@@ -859,7 +1052,8 @@ class _QRPaymentDialogState extends State<_QRPaymentDialog> {
 
 class _ElderlyPackageCard extends StatelessWidget {
   final _ElderlyPackageInfo info;
-  const _ElderlyPackageCard({required this.info});
+  final VoidCallback? onResumePending;
+  const _ElderlyPackageCard({required this.info, this.onResumePending});
 
   @override
   Widget build(BuildContext context) {
@@ -1032,6 +1226,47 @@ class _ElderlyPackageCard extends StatelessWidget {
                           color: AppTheme.textSecondary, fontSize: 13))),
                 ]),
         ),
+        // Pending payment row
+        if (info.pendingPackage != null && onResumePending != null) ...[
+          const Divider(height: 1),
+          InkWell(
+            onTap: onResumePending,
+            borderRadius: const BorderRadius.vertical(
+                bottom: Radius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: AppTheme.warning.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.pending_actions_rounded,
+                      color: AppTheme.warning, size: 16),
+                ),
+                const SizedBox(width: 10),
+                Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Đang chờ: ${info.pendingPackageDetail?.name ?? "Gói dịch vụ"}',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppTheme.warning),
+                    ),
+                    const Text('Nhấn để tiếp tục thanh toán',
+                        style: TextStyle(
+                            fontSize: 11, color: AppTheme.textSecondary)),
+                  ],
+                )),
+                const Icon(Icons.chevron_right_rounded,
+                    color: AppTheme.warning, size: 18),
+              ]),
+            ),
+          ),
+        ],
       ]),
     );
   }

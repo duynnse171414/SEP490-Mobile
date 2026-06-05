@@ -58,44 +58,75 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
     super.dispose();
   }
 
+  String? _viLocaleId;
+
   Future<void> _initSpeech() async {
     _speechAvailable = await _speech.initialize(
       onError: (e) {
+        debugPrint('Speech error: ${e.errorMsg} permanent=${e.permanent}');
         if (mounted) setState(() { _isRecording = false; _interimText = ''; });
         _pulseCtrl.stop();
+        if (e.permanent && mounted) {
+          _showError('Không thể ghi âm. Vui lòng cấp quyền microphone trong Cài đặt.');
+        }
       },
       onStatus: (status) {
+        debugPrint('Speech status: $status');
         if (status == 'done' || status == 'notListening') {
           if (mounted) setState(() { _isRecording = false; _interimText = ''; });
           _pulseCtrl.stop();
         }
       },
+      debugLogging: false,
     );
-    setState(() {});
+
+    // Tìm locale tiếng Việt nếu có
+    if (_speechAvailable) {
+      try {
+        final locales = await _speech.locales();
+        final viList = locales.where((l) => l.localeId.startsWith('vi')).toList();
+        final vi = viList.isNotEmpty ? viList.first : null;
+        _viLocaleId = vi?.localeId;
+        debugPrint('Speech locales available: ${locales.map((l) => l.localeId).toList()}');
+        debugPrint('Vi locale: $_viLocaleId');
+      } catch (_) {}
+    }
+
+    if (mounted) setState(() {});
   }
 
   Future<void> _startRecording() async {
+    // Thử init lại nếu chưa available
     if (!_speechAvailable) {
-      _showError('Thiết bị không hỗ trợ ghi âm. Vui lòng cấp quyền microphone.');
+      await _initSpeech();
+    }
+
+    if (!_speechAvailable) {
+      _showError('Thiết bị chưa cấp quyền microphone. Vào Cài đặt → Ứng dụng → Cấp quyền Micro.');
+      return;
+    }
+
+    if (_speech.isListening) {
+      _stopRecording();
       return;
     }
 
     setState(() { _isRecording = true; _interimText = ''; });
     _pulseCtrl.repeat(reverse: true);
 
-    await _speech.listen(
+    final started = await _speech.listen(
       onResult: (result) {
         if (!mounted) return;
         setState(() {
           _interimText = result.recognizedWords;
-          if (result.finalResult) {
+          if (result.finalResult && result.recognizedWords.isNotEmpty) {
             _textCtrl.text = result.recognizedWords;
             _textCtrl.selection = TextSelection.fromPosition(
                 TextPosition(offset: result.recognizedWords.length));
           }
         });
       },
-      localeId: 'vi_VN',
+      localeId: _viLocaleId,  // null = dùng locale mặc định của device
       listenFor: const Duration(seconds: 30),
       pauseFor: const Duration(seconds: 3),
       listenOptions: stt.SpeechListenOptions(
@@ -103,6 +134,12 @@ class _VoiceMessageScreenState extends State<VoiceMessageScreen>
         partialResults: true,
       ),
     );
+
+    if (!started && mounted) {
+      setState(() { _isRecording = false; _interimText = ''; });
+      _pulseCtrl.stop();
+      _showError('Không thể bắt đầu ghi âm. Thử lại sau.');
+    }
   }
 
   void _stopRecording() {

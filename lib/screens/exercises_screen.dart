@@ -9,7 +9,8 @@ import '../utils/theme.dart';
 // ── Per-elderly action storage ─────────────────────────────────────────────────
 class _ElderlyActionStore {
   static String _key(int elderlyId) => 'elderly_actions_$elderlyId';
-  static String _testCountKey(int actionId) => 'action_test_count_$actionId';
+  static String _testCountKey(int elderlyId, int actionId) =>
+      'action_test_count_${elderlyId}_$actionId';
 
   static const int testLimit = 2;
 
@@ -29,16 +30,16 @@ class _ElderlyActionStore {
   static Future<int> count(int elderlyId) async =>
       (await getActionIds(elderlyId)).length;
 
-  static Future<int> getTestCount(int actionId) async {
+  static Future<int> getTestCount(int elderlyId, int actionId) async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_testCountKey(actionId)) ?? 0;
+    return prefs.getInt(_testCountKey(elderlyId, actionId)) ?? 0;
   }
 
-  static Future<bool> incrementTestCount(int actionId) async {
+  static Future<bool> incrementTestCount(int elderlyId, int actionId) async {
     final prefs = await SharedPreferences.getInstance();
-    final current = prefs.getInt(_testCountKey(actionId)) ?? 0;
+    final current = prefs.getInt(_testCountKey(elderlyId, actionId)) ?? 0;
     if (current >= testLimit) return false;
-    await prefs.setInt(_testCountKey(actionId), current + 1);
+    await prefs.setInt(_testCountKey(elderlyId, actionId), current + 1);
     return true;
   }
 }
@@ -110,7 +111,7 @@ class _ExercisesScreenState extends State<ExercisesScreen>
       return;
     }
 
-    final testCount = await _ElderlyActionStore.getTestCount(action.id);
+    final testCount = await _ElderlyActionStore.getTestCount(widget.elderlyProfile.id, action.id);
     if (testCount >= _ElderlyActionStore.testLimit) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -195,7 +196,7 @@ class _ExercisesScreenState extends State<ExercisesScreen>
     setState(() => _testingIds.add(action.id));
     try {
       await ApiService.sendRobotAction(action.code!);
-      await _ElderlyActionStore.incrementTestCount(action.id);
+      await _ElderlyActionStore.incrementTestCount(widget.elderlyProfile.id, action.id);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Row(children: [
