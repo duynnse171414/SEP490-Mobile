@@ -174,6 +174,26 @@ class _PaymentScreenState extends State<PaymentScreen>
       final pkgs = await ApiService.getUserPackagesByElderly(elderlyId);
       if (!mounted) return;
 
+      // Nếu đang có PENDING → chuyển sang resume thay vì tạo mới
+      final hasPending = pkgs.cast<Map<String, dynamic>>().any((p) =>
+          (p['status'] as String? ?? '').toUpperCase() == 'PENDING');
+      if (hasPending) {
+        final pendingInfo = _elderlyPackages
+            .where((e) => e.profile.id == elderlyId)
+            .toList();
+        if (pendingInfo.isNotEmpty && pendingInfo.first.pendingPackage != null) {
+          await _onResumePending(pendingInfo.first);
+          return;
+        }
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Elderly này đang có đơn chờ thanh toán. Vui lòng hoàn tất đơn cũ trước.'),
+            backgroundColor: AppTheme.warning,
+          ));
+        }
+        return;
+      }
+
       // Tìm gói PAID còn hạn hiện tại
       final paidActive = pkgs.cast<Map<String, dynamic>>().where((p) {
         final s = (p['status'] as String? ?? '').toUpperCase();
@@ -371,12 +391,14 @@ class _PaymentScreenState extends State<PaymentScreen>
       );
 
       if (paid == true && mounted) {
+        _clearPendingForElderly(elderlyId);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Thanh toán thành công! Gói dịch vụ đã được kích hoạt.'),
           backgroundColor: AppTheme.success,
           duration: Duration(seconds: 4),
         ));
-        _load();
+        await Future.delayed(const Duration(seconds: 2));
+        if (mounted) _load();
       }
 
     } on ApiException catch (e) {
@@ -456,6 +478,17 @@ class _PaymentScreenState extends State<PaymentScreen>
     );
   }
 
+  // Xóa trạng thái pending của elderly ngay lập tức (optimistic update)
+  void _clearPendingForElderly(int elderlyId) {
+    setState(() {
+      _elderlyPackages = _elderlyPackages.map((e) {
+        if (e.profile.id != elderlyId) return e;
+        return _ElderlyPackageInfo(
+            e.profile, e.activePackage, e.packageDetail, null, null);
+      }).toList();
+    });
+  }
+
   int get _activeCount =>
       _elderlyPackages.where((e) => e.activePackage != null).length;
 
@@ -515,14 +548,12 @@ class _PaymentScreenState extends State<PaymentScreen>
 
     _showLoading();
     try {
-      final result = await ApiService.createPayment(pendingDetail.id, info.profile.id);
+      final result = await ApiService.getPendingPayment(info.profile.id);
       if (!mounted) return;
       Navigator.pop(context);
 
       final checkoutUrl = result['checkoutUrl'] as String? ?? '';
-      final qrCode = (result['qrCode'] as String? ?? '').isNotEmpty
-          ? result['qrCode'] as String
-          : checkoutUrl;
+      final qrCode = checkoutUrl;
       final amount = (result['amount'] ?? 0).toDouble();
 
       if (checkoutUrl.isEmpty && qrCode.isEmpty) {
@@ -542,12 +573,14 @@ class _PaymentScreenState extends State<PaymentScreen>
       );
 
       if (paid == true && mounted) {
+        _clearPendingForElderly(info.profile.id);
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Thanh toán thành công! Gói dịch vụ đã được kích hoạt.'),
           backgroundColor: AppTheme.success,
           duration: Duration(seconds: 4),
         ));
-        _load();
+        await Future.delayed(const Duration(seconds: 2));
+        if (mounted) _load();
       }
     } on ApiException catch (e) {
       if (mounted) {
@@ -803,14 +836,28 @@ class _QRPaymentDialogState extends State<_QRPaymentDialog> {
     setState(() => _checking = true);
     try {
       final pkgs = await ApiService.getUserPackagesByElderly(widget.elderlyId);
-      final hasPaid = pkgs.cast<Map<String, dynamic>>().any((p) {
-        return (p['status'] as String? ?? '').toUpperCase() == 'PAID';
+      final cast = pkgs.cast<Map<String, dynamic>>();
+      final pkgIdStr = widget.pkg.id.toString();
+
+      // Detect PAID cho đúng gói đang thanh toán
+      final hasPaid = cast.any((p) {
+        final status = (p['status'] as String? ?? '').toUpperCase();
+        final svcId = (p['servicePackageId'] ?? '').toString();
+        return status == 'PAID' && svcId == pkgIdStr;
       });
 
-      if (mounted && hasPaid) {
+      // Fallback: nếu không còn PENDING nào cho gói này → BE đã xử lý xong
+      final stillPending = cast.any((p) {
+        final status = (p['status'] as String? ?? '').toUpperCase();
+        final svcId = (p['servicePackageId'] ?? '').toString();
+        return status == 'PENDING' && svcId == pkgIdStr;
+      });
+      final paymentDone = hasPaid || !stillPending;
+
+      if (mounted && paymentDone) {
         setState(() { _paid = true; _statusLabel = 'Thanh toán thành công!'; });
         _pollTimer?.cancel();
-        await Future.delayed(const Duration(milliseconds: 1500));
+        await Future.delayed(const Duration(seconds: 3));
         if (mounted) Navigator.of(context).pop(true);
       } else if (mounted) {
         setState(() => _statusLabel = 'Đang chờ thanh toán...');

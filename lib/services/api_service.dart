@@ -226,10 +226,10 @@ class ApiService {
   }
 
   static Future<void> verifyOtp(String email, String otp) async {
-    final res = await http.post(
-      Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.verifyOtp}'),
-      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-      body: json.encode({'email': email, 'otp': otp}),
+    final uri = Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.verifyOtp}')
+        .replace(queryParameters: {'email': email, 'otp': otp});
+    final res = await http.post(uri,
+      headers: {'Accept': 'application/json'},
     ).timeout(const Duration(seconds: 30));
     await _handleResponse(res);
   }
@@ -289,6 +289,16 @@ class ApiService {
       Uri.parse('${AppConstants.baseUrl}${ApiEndpoints.createElderlyForAccount(accountId)}'),
       headers: _headers,
       body: json.encode(request.toJson()),
+    ).timeout(const Duration(seconds: 30));
+    final data = await _handleResponse(res);
+    return ElderlyProfile.fromJson(data);
+  }
+
+  static Future<ElderlyProfile> updateElderlyProfile(int id, Map<String, dynamic> body) async {
+    final res = await http.put(
+      Uri.parse('${AppConstants.baseUrl}/api/elderly-profile/$id'),
+      headers: _headers,
+      body: json.encode(body),
     ).timeout(const Duration(seconds: 30));
     final data = await _handleResponse(res);
     return ElderlyProfile.fromJson(data);
@@ -544,6 +554,14 @@ class ApiService {
     ).timeout(const Duration(seconds: 30));
     return _handleResponse(res);
   }
+  static Future<Map<String, dynamic>> getPendingPayment(int elderlyId) async {
+    final res = await http.get(
+      Uri.parse('${AppConstants.baseUrl}/api/payments/pending/$elderlyId'),
+      headers: _headers,
+    ).timeout(const Duration(seconds: 30));
+    return _handleResponse(res);
+  }
+
   static Future<List<dynamic>> getUserPackagesByElderly(int elderlyId) async {
     final res = await http.get(
       Uri.parse('${AppConstants.baseUrl}/api/user-packages/elderly/$elderlyId'),
